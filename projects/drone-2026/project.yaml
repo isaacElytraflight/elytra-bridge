@@ -1,0 +1,74 @@
+id: drone-2026
+name: Drone 2026 Compatibility Project
+description: MVP project that mirrors the UAVs at Berkeley drone-2026 sim and physical workflow.
+robotType: drone
+ros:
+  distro: jazzy
+
+defaultMission:
+  filename: mission_ui.yaml
+  yamlText: |
+    environment:
+      Geofence:
+        points:
+          - [37.0, -122.0, 30.0]
+      waypoints:
+        points:
+          - [37.0, -122.0, 30.0]
+      red_target: [37.0, -122.0, 30.0]
+      x_target: [37.0, -122.0, 30.0]
+      number_target: [37.0, -122.0, 30.0]
+    mission:
+      steps:
+        - takeoff
+        - time_trial
+        - object_localization
+        - return_to_home
+        - land
+
+sim:
+  composeFile: ../../../drone-2026/SITL/web-sim/docker-compose.yml
+  composeProject: elytra-drone-2026
+  containerName: drone-2026-sim
+  novncOrigin: http://127.0.0.1:6080/vnc.html?autoconnect=1&resize=scale&path=websockify
+  missionDir: /home/sim/drone_workspace/drone-2026/ros_workspace/src/uav_mission/missions
+  rosInstallSetupPath: /home/sim/drone_workspace/drone-2026/ros_workspace/install/setup.bash
+  startScriptPath: /home/sim/drone_workspace/drone-2026/start_drone.sh
+  recordingScriptPath: /home/sim/drone_workspace/drone-2026/start_recording.sh
+  tmuxSession: drone_control
+  tmuxCaptureLines: 2500
+  tmuxStopGraceSeconds: 20
+  missionExtraArgs: include_camera:=true camera_backend:=sim
+  autoStopOnDisconnect: false
+
+real:
+  host: 100.105.25.30
+  port: 22
+  user: pi
+  privateKeyPath: C:/Users/isaac/.ssh/id_ed25519
+  missionDir: /home/pi/drone_workspace/drone-2026/ros_workspace/src/uav_mission/missions
+  rosInstallSetupPath: /home/pi/drone_workspace/drone-2026/ros_workspace/install/setup.bash
+  startScriptPath: /home/pi/drone_workspace/drone-2026/start_drone.sh
+  recordingScriptPath: /home/pi/drone_workspace/drone-2026/start_recording.sh
+  tmuxSession: drone_control
+  tmuxCaptureLines: 2500
+  tmuxStopGraceSeconds: 60
+  missionExtraArgs: ""
+
+buttons:
+  - id: takeoff
+    label: Takeoff
+    description: Start the full drone stack using start_drone.sh.
+    scriptKey: start
+    requiresMission: true
+    runMode: full
+  - id: passive-record
+    label: Passive Record
+    description: Start recording, MAVROS, and camera support using start_recording.sh.
+    scriptKey: recording
+    requiresMission: false
+    runMode: passive
+  - id: end-mission
+    label: End Mission
+    description: Send Ctrl+C to the active tmux session and clean up the running workflow.
+    stopAction: true
