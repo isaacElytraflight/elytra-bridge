@@ -24,7 +24,13 @@ source "$_START_REC_DIR/start_ros.sh"
 
 ETH_GIMBAL_IF="${ETH_GIMBAL_IF:-eth0}"
 ETH_GIMBAL_IP="${ETH_GIMBAL_IP:-192.168.144.10/24}"
-BAG_DIR="${BAG_DIR:-/home/$USER/drone_workspace/bags}"
+if [[ "${ELYTRA_TARGET:-}" == "sim" ]]; then
+  BAG_DIR="${BAG_DIR:-/home/sim/drone_workspace/bags}"
+  MAVROS_FCU_URL="${MAVROS_FCU_URL:-udp://:14540@}"
+  PASSIVE_CAMERA_EXTRA_ARGS="${PASSIVE_CAMERA_EXTRA_ARGS:-${DRONE_MISSION_EXTRA_ARGS:-camera_backend:=sim}}"
+else
+  BAG_DIR="${BAG_DIR:-/home/${USER:-$(id -un)}/drone_workspace/bags}"
+fi
 MAVROS_READY_DELAY="${MAVROS_READY_DELAY:-2}"
 # Physical default is USB serial; for SITL use e.g. MAVROS_FCU_URL=udp://:14540@
 MAVROS_FCU_URL="${MAVROS_FCU_URL:-serial:///dev/ttyACM0:921600}"

@@ -14,12 +14,16 @@ source "$_SCRIPT_DIR/start_ros.sh"
 LAUNCH_ARGS=()
 if [[ -n "${1:-}" ]]; then
   LAUNCH_ARGS+=(mission_file:="$1")
+  shift
 fi
 
 if [[ -n "${DRONE_MISSION_EXTRA_ARGS:-}" ]]; then
   # shellcheck disable=SC2206
   EXTRA_ARGS=( ${DRONE_MISSION_EXTRA_ARGS} )
   LAUNCH_ARGS+=("${EXTRA_ARGS[@]}")
+fi
+if [[ $# -gt 0 ]]; then
+  LAUNCH_ARGS+=("$@")
 fi
 
 _launch_arg_value() {

@@ -261,8 +261,11 @@ export class SimTarget {
 
   async disconnect() {}
 
-  async exec(command) {
-    const { stdout, stderr } = await runFile("docker", ["exec", this.config.containerName, "bash", "-lc", command], {
+  async exec(command, { user = "" } = {}) {
+    const args = ["exec"];
+    if (user) args.push("-u", user);
+    args.push(this.config.containerName, "bash", "-lc", command);
+    const { stdout, stderr } = await runFile("docker", args, {
       timeout: 120000,
     });
     return { stdout, stderr };
@@ -280,19 +283,33 @@ export class SimTarget {
 
   async runScript(scriptPath, { remoteMissionPath = "", extraArgs = "" } = {}) {
     const session = this.config.tmuxSession;
-    const source = this.config.rosInstallSetupPath ? `source ${shellQuote(this.config.rosInstallSetupPath)} || true; ` : "";
+    const simUser = this.config.user || "sim";
+    const simHome = `/home/${simUser}`;
     const mission = remoteMissionPath ? ` ${shellQuote(remoteMissionPath)}` : "";
     const args = extraArgs || this.config.missionExtraArgs || "";
-    const command = `${source}export ELYTRA_TARGET=sim; export ELYTRA_ROS_DISTRO=jazzy; bash ${shellQuote(scriptPath)}${mission}${args ? ` ${args}` : ""}`;
-    await this.exec(`tmux kill-session -t ${shellQuote(session)} 2>/dev/null || true`);
-    await this.exec(`tmux new-session -d -s ${shellQuote(session)} ${shellQuote(`bash -lc ${shellQuote(command)}`)}`);
+    const envExports = [
+      ["HOME", simHome],
+      ["USER", simUser],
+      ["ELYTRA_TARGET", "sim"],
+      ["ELYTRA_ROS_DISTRO", "jazzy"],
+      ["DRONE_ROS_INSTALL", this.config.rosInstallSetupPath || `${simHome}/drone_workspace/drone-2026/ros_workspace/install/setup.bash`],
+      ["DRONE_MISSION_EXTRA_ARGS", args],
+      ["PASSIVE_CAMERA_EXTRA_ARGS", args],
+      ["MAVROS_FCU_URL", "udp://:14540@"],
+      ["BAG_DIR", `${simHome}/drone_workspace/bags`],
+    ]
+      .map(([key, value]) => `export ${key}=${shellQuote(value)};`)
+      .join(" ");
+    const command = `${envExports} bash ${shellQuote(scriptPath)}${mission}${args ? ` ${args}` : ""}`;
+    await this.exec(`tmux kill-session -t ${shellQuote(session)} 2>/dev/null || true`, { user: simUser });
+    await this.exec(`tmux new-session -d -s ${shellQuote(session)} ${shellQuote(`bash -lc ${shellQuote(command)}`)}`, { user: simUser });
   }
 
   async stop() {
     const session = this.config.tmuxSession;
-    await this.exec(`tmux send-keys -t ${shellQuote(session)} C-c 2>/dev/null || true`);
+    await this.exec(`tmux send-keys -t ${shellQuote(session)} C-c 2>/dev/null || true`, { user: "sim" });
     await sleep(this.config.tmuxStopGraceSeconds * 1000);
-    await this.exec(`tmux kill-session -t ${shellQuote(session)} 2>/dev/null || true`);
+    await this.exec(`tmux kill-session -t ${shellQuote(session)} 2>/dev/null || true`, { user: "sim" });
   }
 
   async reset() {
@@ -310,7 +327,7 @@ export class SimTarget {
 
   async captureLog() {
     try {
-      const { stdout } = await this.exec(`tmux capture-pane -pt ${shellQuote(this.config.tmuxSession)} -S -${this.config.tmuxCaptureLines} 2>/dev/null || true`);
+      const { stdout } = await this.exec(`tmux capture-pane -pt ${shellQuote(this.config.tmuxSession)} -S -${this.config.tmuxCaptureLines} 2>/dev/null || true`, { user: "sim" });
       return { text: stdout, hasSession: Boolean(stdout) };
     } catch {
       return { text: "", hasSession: false };
