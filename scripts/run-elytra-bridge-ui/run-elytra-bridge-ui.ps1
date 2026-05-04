@@ -4,6 +4,12 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Root = Resolve-Path (Join-Path $ScriptDir "..\..")
 Set-Location $Root
 
+$DroneYaml = Join-Path $Root "projects\drone-2026\project.yaml"
+if (-not (Test-Path $DroneYaml)) {
+    Write-Host "Initializing Git submodules (projects/drone-2026)..."
+    git -C $Root submodule update --init --recursive
+}
+
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
   Write-Error "Docker CLI not found. Install Docker Desktop or Docker Engine."
   exit 1

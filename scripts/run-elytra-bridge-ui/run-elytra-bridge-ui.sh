@@ -7,6 +7,11 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 
+if [[ ! -f "$ROOT/projects/drone-2026/project.yaml" ]]; then
+  echo "Initializing Git submodules (projects/drone-2026)..."
+  git -C "$ROOT" submodule update --init --recursive
+fi
+
 if ! command -v docker >/dev/null 2>&1; then
   echo "[ERROR] Docker CLI not found. Install Docker Desktop or Docker Engine." >&2
   exit 1

@@ -5,6 +5,11 @@ set "SCRIPT_DIR=%~dp0"
 for %%I in ("%SCRIPT_DIR%..\..") do set "ROOT=%%~fI"
 cd /d "%ROOT%" || exit /b 1
 
+if not exist "%ROOT%\projects\drone-2026\project.yaml" (
+  echo Initializing Git submodules ^(projects/drone-2026^)...
+  git -C "%ROOT%" submodule update --init --recursive || exit /b 1
+)
+
 where docker >nul 2>nul
 if errorlevel 1 (
   echo [ERROR] Docker CLI not found. Install Docker Desktop or Docker Engine.

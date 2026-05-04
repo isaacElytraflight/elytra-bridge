@@ -45,14 +45,11 @@ flowchart TB
   metadata --> transportConfig["sim and physical connection settings"]
 ```
 
+Each project is a folder that can be copied, versioned, and opened later (from the bundled `projects/` directory or from an arbitrary path on disk). **Normative layout, `project.yaml` fields, env precedence, and responsibilities** are documented in [`project-folder-contract.md`](project-folder-contract.md). The roadmap summary:
 
-
-Each project is a folder that can be copied, versioned, and opened later. The MVP keeps the descriptor intentionally simple:
-
-- `id`, `name`, `robotType`, and `ros.distro`.
-- `sim`: Docker Compose file, container name, noVNC URL, mission paths, tmux session, and script paths.
-- `real`: SSH host/user/key settings, mission paths, tmux session, and script paths.
-- `buttons`: UI labels mapped to action ids, with runtime scripts stored under `buttons/scripts`.
+- Required top-level dirs: **`real/`** and **`sim/`**, plus root **`project.yaml`**.
+- Descriptor: `id`, `name`, `robotType`, and `ros.distro`; `sim` and `real` blocks; `buttons`; optional `defaultMission` and `local`.
+- Mode env: `real/.env` and `sim/.env` loaded only for the matching connect mode.
 
 The Drone 2026 simulator image is split into two Docker layers while still running as one backend-controlled container for the MVP:
 
@@ -65,7 +62,7 @@ This keeps the current `drone-2026-sim` control container compatible with missio
 
 - React + Vite frontend and Express backend under `application/`.
 - File-backed project discovery from `projects/*/project.yaml`.
-- A bundled `drone-2026` project descriptor with layered simulator/robot Docker images.
+- A default `drone-2026` project via Git submodule ([`UAVs-at-Berkeley/drone-2026`](https://github.com/UAVs-at-Berkeley/drone-2026)), with layered simulator/robot Docker images.
 - Physical mode over SSH/SFTP/tmux.
 - Simulation mode through Docker Compose plus `docker exec` and `docker cp`, using one robot container built from a reusable simulator base.
 - Mission YAML editing and save.

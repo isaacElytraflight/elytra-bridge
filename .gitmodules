@@ -1,0 +1,4 @@
+[submodule "projects/drone-2026"]
+	path = projects/drone-2026
+	url = https://github.com/UAVs-at-Berkeley/drone-2026.git
+	branch = main
