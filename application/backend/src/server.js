@@ -1,9 +1,12 @@
 import express from "express";
 import cors from "cors";
 import fs from "node:fs";
+import path from "node:path";
 import { promises as fsp } from "node:fs";
 import { appConfig, ensureEnvFile, ENV_FILE_PATH, reloadEnv } from "./config.js";
-import { listProjects, loadProject, projectForClient } from "./projectStore.js";
+import { pickProjectFolderNative } from "./folderPicker.js";
+import { readRecentProjects, upsertRecentProject, removeRecentProject } from "./recentProjectsStore.js";
+import { listProjects, loadProject, projectForClient, validateProjectFolder } from "./projectStore.js";
 import { SimTarget } from "./simTarget.js";
 import { SshTarget } from "./sshTarget.js";
 import { validateMissionFilename, validateMissionYaml } from "./missionValidation.js";
@@ -18,6 +21,7 @@ const idleProgress = () => ({ percent: 0, step: "Idle", detail: "Waiting to star
 
 const session = {
   projectId: appConfig().defaultProjectId,
+  openProjectRoot: "",
   project: null,
   mode: "physical",
   target: null,
@@ -48,6 +52,7 @@ function normalizeMode(mode) {
 function statusPayload() {
   return {
     projectId: session.projectId,
+    openProjectRoot: session.openProjectRoot || "",
     projectName: session.project?.name || session.projectId,
     connectionState: session.connectionState,
     sshConnected: session.sshConnected,
@@ -67,13 +72,18 @@ function statusPayload() {
   };
 }
 
-async function setTarget(projectId, mode, password = "") {
+async function setTarget(projectId, mode, password = "", openProjectRoot = "") {
   const selectedMode = normalizeMode(mode);
-  const project = await loadProject(projectId || session.projectId, { mode: selectedMode });
+  const rootOpt = String(openProjectRoot ?? "").trim();
+  const project = await loadProject(projectId || session.projectId, {
+    mode: selectedMode,
+    ...(rootOpt ? { projectRoot: rootOpt } : {}),
+  });
   const modeConfig = project.modes[selectedMode];
   await session.target?.disconnect?.();
 
   session.projectId = project.id;
+  session.openProjectRoot = project.openProjectRoot || "";
   session.project = project;
   session.mode = selectedMode;
   session.target = selectedMode === "sim" ? new SimTarget(modeConfig, progress) : new SshTarget(modeConfig);
@@ -160,21 +170,126 @@ function asyncRoute(fn) {
   };
 }
 
+app.get("/", (_req, res) => {
+  const apiPort = appConfig().port;
+  res.type("html").send(`<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"/><title>Elytra Bridge API</title></head>
+<body>
+  <p>This URL is the <strong>API only</strong> (port ${apiPort}). There is no SPA here; that is why you would see “Cannot GET /” without this page.</p>
+  <p><strong>Operator UI (dev):</strong> open <a href="http://localhost:5173">http://localhost:5173</a> — Vite serves the React app when you run <code>npm run dev</code> from <code>application/</code>.</p>
+  <p><a href="/health">GET /health</a> — API check</p>
+</body>
+</html>`);
+});
+
 app.get("/health", (_req, res) => {
   res.json({ ok: true, app: "elytra-bridge", version: "0.1.0" });
 });
 
 app.get("/projects", asyncRoute(async (_req, res) => {
-  res.json({ projects: await listProjects(), defaultProjectId: appConfig().defaultProjectId });
+  const bundled = await listProjects();
+  const recentProjects = await readRecentProjects();
+  res.json({
+    projects: bundled,
+    recentProjects,
+    defaultProjectId: appConfig().defaultProjectId,
+  });
+}));
+
+async function openValidatedProjectFolder(rawRoot) {
+  const validation = await validateProjectFolder(rawRoot);
+  if (!validation.ok) {
+    return {
+      ok: false,
+      errors: validation.errors,
+      warnings: validation.warnings,
+    };
+  }
+  const descriptorId = (validation.descriptor && validation.descriptor.id) || path.basename(validation.root);
+  const project = await loadProject(descriptorId, { projectRoot: validation.root });
+  const recentProjects = await upsertRecentProject({
+    root: validation.root,
+    descriptorId: project.id,
+    name: project.name || project.id,
+    warnings: validation.warnings,
+  });
+  return {
+    ok: true,
+    project,
+    warnings: validation.warnings,
+    recentProjects,
+  };
+}
+
+app.post("/projects/open-dialog", asyncRoute(async (_req, res) => {
+  const picked = await pickProjectFolderNative();
+  if (!picked) {
+    res.status(400).json({ error: "Folder dialog cancelled or unavailable on this OS." });
+    return;
+  }
+  const result = await openValidatedProjectFolder(picked);
+  if (!result.ok) {
+    res.status(400).json({
+      error: result.errors.join(" "),
+      errors: result.errors,
+      warnings: result.warnings,
+    });
+    return;
+  }
+  res.json({
+    project: projectForClient(result.project),
+    openProjectRoot: result.project.openProjectRoot || "",
+    warnings: result.warnings,
+    recentProjects: result.recentProjects,
+  });
+}));
+
+app.post("/projects/open-path", asyncRoute(async (req, res) => {
+  const rawRoot = String(req.body?.projectRoot ?? "").trim();
+  if (!rawRoot) {
+    res.status(400).json({ error: "projectRoot is required in JSON body." });
+    return;
+  }
+  const result = await openValidatedProjectFolder(rawRoot);
+  if (!result.ok) {
+    res.status(400).json({
+      error: result.errors.join(" "),
+      errors: result.errors,
+      warnings: result.warnings,
+    });
+    return;
+  }
+  res.json({
+    project: projectForClient(result.project),
+    openProjectRoot: result.project.openProjectRoot || "",
+    warnings: result.warnings,
+    recentProjects: result.recentProjects,
+  });
+}));
+
+app.delete("/projects/recent", asyncRoute(async (req, res) => {
+  const rawRoot = String(req.body?.projectRoot ?? req.query?.projectRoot ?? "").trim();
+  if (!rawRoot) {
+    res.status(400).json({ error: "projectRoot is required." });
+    return;
+  }
+  const recentProjects = await removeRecentProject(rawRoot);
+  res.json({ recentProjects });
 }));
 
 app.get("/projects/:projectId", asyncRoute(async (req, res) => {
-  const project = await loadProject(req.params.projectId);
-  res.json({ project: projectForClient(project) });
+  const projectRoot = String(req.query.projectRoot ?? "").trim();
+  const project = await loadProject(req.params.projectId, projectRoot ? { projectRoot } : {});
+  res.json({
+    project: projectForClient(project),
+    openProjectRoot: project.openProjectRoot || "",
+  });
 }));
 
 app.get("/mission/default", asyncRoute(async (req, res) => {
-  const project = await loadProject(req.query.projectId || session.projectId);
+  const projectRoot = String(req.query.projectRoot ?? "").trim();
+  const project = await loadProject(req.query.projectId || session.projectId, projectRoot ? { projectRoot } : {});
   res.json({
     filename: project.defaultMission?.filename || "mission_ui.yaml",
     yamlText: project.defaultMission?.yamlText || "mission:\n  steps: []\n",
@@ -182,7 +297,10 @@ app.get("/mission/default", asyncRoute(async (req, res) => {
 }));
 
 app.get("/drone/prefill", asyncRoute(async (_req, res) => {
-  const project = await loadProject(session.projectId, { mode: "physical" });
+  const project = await loadProject(session.projectId, {
+    mode: "physical",
+    ...(session.openProjectRoot ? { projectRoot: session.openProjectRoot } : {}),
+  });
   res.json({
     physicalSshPassword: project.modes.physical.sshPassword || "",
     simSshPassword: "",
@@ -194,12 +312,12 @@ app.get("/drone/status", (_req, res) => {
 });
 
 app.post("/drone/connect", asyncRoute(async (req, res) => {
-  await setTarget(req.body.projectId, req.body.mode, req.body.password);
+  await setTarget(req.body.projectId, req.body.mode, req.body.password, req.body.projectRoot || "");
   res.json(statusPayload());
 }));
 
 app.post("/session/connect", asyncRoute(async (req, res) => {
-  await setTarget(req.body.projectId, req.body.mode, req.body.password);
+  await setTarget(req.body.projectId, req.body.mode, req.body.password, req.body.projectRoot || "");
   res.json(statusPayload());
 }));
 

@@ -18,14 +18,41 @@ async function request(path, options = {}) {
 export const api = {
   health: () => request("/health"),
   projects: () => request("/projects"),
-  project: (projectId) => request(`/projects/${encodeURIComponent(projectId)}`),
+  project: (projectId, projectRoot) => {
+    const qs = projectRoot ? `?projectRoot=${encodeURIComponent(projectRoot)}` : "";
+    return request(`/projects/${encodeURIComponent(projectId)}${qs}`);
+  },
   status: () => request("/drone/status"),
   prefill: () => request("/drone/prefill"),
-  defaultMission: (projectId) => request(`/mission/default?projectId=${encodeURIComponent(projectId || "")}`),
-  connect: ({ projectId, mode, password }) =>
+  defaultMission: (projectId, projectRoot) => {
+    const idQs = `projectId=${encodeURIComponent(projectId || "")}`;
+    const rootQs = projectRoot ? `&projectRoot=${encodeURIComponent(projectRoot)}` : "";
+    return request(`/mission/default?${idQs}${rootQs}`);
+  },
+  openProjectDialog: () =>
+    request("/projects/open-dialog", {
+      method: "POST",
+      body: "{}",
+    }),
+  openProjectPath: (projectRoot) =>
+    request("/projects/open-path", {
+      method: "POST",
+      body: JSON.stringify({ projectRoot }),
+    }),
+  removeRecentProject: (projectRoot) =>
+    request(`/projects/recent?projectRoot=${encodeURIComponent(projectRoot)}`, {
+      method: "DELETE",
+      body: "{}",
+    }),
+  connect: ({ projectId, mode, password, projectRoot }) =>
     request("/drone/connect", {
       method: "POST",
-      body: JSON.stringify({ projectId, mode, password }),
+      body: JSON.stringify({
+        projectId,
+        mode,
+        password,
+        projectRoot: projectRoot || "",
+      }),
     }),
   disconnect: () => request("/session/disconnect", { method: "POST", body: "{}" }),
   saveMission: (projectId, filename, yamlText) =>

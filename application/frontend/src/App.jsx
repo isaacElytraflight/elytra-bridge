@@ -3,6 +3,7 @@ import { api } from "./api";
 
 const emptyStatus = {
   projectId: "drone-2026",
+  openProjectRoot: "",
   connectionState: "disconnected",
   sshConnected: false,
   inFlight: false,
@@ -44,8 +45,13 @@ function getInitialTheme() {
 
 export default function App() {
   const [projects, setProjects] = useState([]);
+  const [recentProjects, setRecentProjects] = useState([]);
   const [project, setProject] = useState(null);
   const [projectId, setProjectId] = useState("drone-2026");
+  const [projectRoot, setProjectRoot] = useState("");
+  const [fileMenuOpen, setFileMenuOpen] = useState(false);
+  const [pathModalOpen, setPathModalOpen] = useState(false);
+  const [pathDraft, setPathDraft] = useState("");
   const [connectionMode, setConnectionMode] = useState("physical");
   const [status, setStatus] = useState(emptyStatus);
   const [missionName, setMissionName] = useState("mission_ui.yaml");
@@ -67,6 +73,7 @@ export default function App() {
   const [hotswapStatus, setHotswapStatus] = useState("");
   const tmuxPreRef = useRef(null);
   const followLogRef = useRef(true);
+  const menuRef = useRef(null);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -83,15 +90,29 @@ export default function App() {
       const data = await api.projects();
       if (cancelled) return;
       setProjects(data.projects || []);
+      setRecentProjects(data.recentProjects || []);
       const selected = data.defaultProjectId || data.projects?.[0]?.id || "drone-2026";
       setProjectId(selected);
-      await loadProject(selected);
+      setProjectRoot("");
+      await loadProject(selected, "");
     }
     boot().catch((error) => setInfo(error.message));
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- boot runs once; loadProject defined below
   }, []);
+
+  useEffect(() => {
+    if (!fileMenuOpen) return undefined;
+    function onDocMouseDown(event) {
+      if (menuRef.current && !menuRef.current.contains(event.target)) {
+        setFileMenuOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", onDocMouseDown);
+    return () => document.removeEventListener("mousedown", onDocMouseDown);
+  }, [fileMenuOpen]);
 
   useEffect(() => {
     refreshStatus();
@@ -123,12 +144,104 @@ export default function App() {
     };
   }, [status.sshConnected, tmuxLogPaused]);
 
-  async function loadProject(nextProjectId) {
-    const data = await api.project(nextProjectId);
+  async function loadProject(nextProjectId, nextProjectRoot) {
+    const resolvedRoot = nextProjectRoot !== undefined ? nextProjectRoot : projectRoot;
+    const rootArg = resolvedRoot ? resolvedRoot : undefined;
+    const data = await api.project(nextProjectId, rootArg);
     setProject(data.project);
-    const mission = await api.defaultMission(nextProjectId);
+    setProjectId(data.project.id);
+    setProjectRoot(data.openProjectRoot || "");
+    const mission = await api.defaultMission(data.project.id, rootArg);
     setMissionName(mission.filename || "mission_ui.yaml");
     setMissionYaml(mission.yamlText || "mission:\n  steps: []\n");
+  }
+
+  async function selectBundledProject(nextProjectId) {
+    setSavedMissionPath("");
+    setInfo("");
+    await loadProject(nextProjectId, "");
+  }
+
+  async function closeProjectToDefault() {
+    const data = await api.projects();
+    setProjects(data.projects || []);
+    setRecentProjects(data.recentProjects || []);
+    const selected = data.defaultProjectId || data.projects?.[0]?.id || "drone-2026";
+    setSavedMissionPath("");
+    setInfo("");
+    await loadProject(selected, "");
+  }
+
+  async function handleOpenProjectDialog() {
+    setFileMenuOpen(false);
+    setBusy(true);
+    setInfo("");
+    try {
+      const data = await api.openProjectDialog();
+      setRecentProjects(data.recentProjects || []);
+      setSavedMissionPath("");
+      setProject(data.project);
+      setProjectId(data.project.id);
+      setProjectRoot(data.openProjectRoot || "");
+      const mission = await api.defaultMission(data.project.id, data.openProjectRoot || undefined);
+      setMissionName(mission.filename || "mission_ui.yaml");
+      setMissionYaml(mission.yamlText || "mission:\n  steps: []\n");
+      setInfo(data.warnings?.length ? `Opened with warnings:\n${data.warnings.join("\n")}` : "");
+    } catch (error) {
+      setInfo(error.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submitOpenProjectPath() {
+    const trimmed = pathDraft.trim();
+    if (!trimmed) return;
+    setBusy(true);
+    setPathModalOpen(false);
+    setPathDraft("");
+    setInfo("");
+    try {
+      const data = await api.openProjectPath(trimmed);
+      setRecentProjects(data.recentProjects || []);
+      setSavedMissionPath("");
+      setProject(data.project);
+      setProjectId(data.project.id);
+      setProjectRoot(data.openProjectRoot || "");
+      const mission = await api.defaultMission(data.project.id, data.openProjectRoot || undefined);
+      setMissionName(mission.filename || "mission_ui.yaml");
+      setMissionYaml(mission.yamlText || "mission:\n  steps: []\n");
+      setInfo(data.warnings?.length ? `Opened with warnings:\n${data.warnings.join("\n")}` : "");
+    } catch (error) {
+      setInfo(error.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function openRecentProject(entry) {
+    setFileMenuOpen(false);
+    setBusy(true);
+    setInfo("");
+    try {
+      const id = entry.descriptorId || entry.name || projectId;
+      setSavedMissionPath("");
+      await loadProject(id, entry.root);
+    } catch (error) {
+      setInfo(error.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleRemoveRecentProject(root, event) {
+    event.stopPropagation();
+    try {
+      const data = await api.removeRecentProject(root);
+      setRecentProjects(data.recentProjects || []);
+    } catch (error) {
+      setInfo(error.message);
+    }
   }
 
   async function refreshStatus() {
@@ -140,18 +253,16 @@ export default function App() {
     }
   }
 
-  async function handleProjectChange(nextProjectId) {
-    setProjectId(nextProjectId);
-    setSavedMissionPath("");
-    setInfo("");
-    await loadProject(nextProjectId);
-  }
-
   async function connect() {
     setBusy(true);
     setInfo("");
     try {
-      const next = await api.connect({ projectId, mode: connectionMode, password: sshPassword });
+      const next = await api.connect({
+        projectId,
+        mode: connectionMode,
+        password: sshPassword,
+        projectRoot: projectRoot || "",
+      });
       setStatus(next);
       setInfo(connectionMode === "sim" ? "Connected to local simulation." : "Connected to physical robot.");
     } catch (error) {
@@ -308,8 +419,119 @@ export default function App() {
   const simModeActive = (status.mode || connectionMode) === "sim";
   const canHotswapRepo = simModeActive && status.sshConnected && !busy && !hotswapBusy;
 
+  const pickerDisabled = busy || status.sshConnected;
+
   return (
     <main className="app">
+      <div className="menu-bar" ref={menuRef}>
+        <div className={`menu-wrap ${fileMenuOpen ? "menu-open" : ""}`}>
+          <button
+            type="button"
+            className="menu-trigger secondary"
+            aria-expanded={fileMenuOpen}
+            aria-haspopup="true"
+            onClick={() => setFileMenuOpen((open) => !open)}
+          >
+            File
+          </button>
+          {fileMenuOpen && (
+            <div className="menu-dropdown" role="menu">
+              <button
+                type="button"
+                className="menu-item"
+                role="menuitem"
+                disabled={pickerDisabled}
+                onClick={() => void handleOpenProjectDialog()}
+              >
+                Open Project…
+              </button>
+              <button
+                type="button"
+                className="menu-item"
+                role="menuitem"
+                disabled={pickerDisabled}
+                onClick={() => {
+                  setFileMenuOpen(false);
+                  setPathModalOpen(true);
+                }}
+              >
+                Open Project by Path…
+              </button>
+              <button
+                type="button"
+                className="menu-item"
+                role="menuitem"
+                disabled={pickerDisabled}
+                onClick={() => {
+                  setFileMenuOpen(false);
+                  void closeProjectToDefault();
+                }}
+              >
+                Close Project (bundled default)
+              </button>
+              <div className="menu-divider" />
+              <div className="menu-heading">Bundled projects</div>
+              {projects.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  className="menu-item"
+                  role="menuitem"
+                  disabled={pickerDisabled}
+                  onClick={() => {
+                    setFileMenuOpen(false);
+                    void selectBundledProject(item.id);
+                  }}
+                >
+                  {item.name}
+                </button>
+              ))}
+              <div className="menu-divider" />
+              <div className="menu-heading">Recent projects</div>
+              {recentProjects.length === 0 ? (
+                <div className="menu-muted menu-item-static">No recent folders yet.</div>
+              ) : (
+                recentProjects.map((entry) => (
+                  <div key={entry.root} className="menu-item-row">
+                    <button
+                      type="button"
+                      className="menu-item menu-item-grow"
+                      role="menuitem"
+                      disabled={pickerDisabled}
+                      title={entry.root}
+                      onClick={() => void openRecentProject(entry)}
+                    >
+                      <span className="menu-item-title">{entry.name || entry.descriptorId || entry.root}</span>
+                      <span className="menu-item-sub muted">{entry.root}</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="menu-remove secondary"
+                      aria-label={`Remove ${entry.root} from recent`}
+                      disabled={pickerDisabled}
+                      onClick={(event) => void handleRemoveRecentProject(entry.root, event)}
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+        </div>
+        <div className="menu-context muted">
+          <strong>{project?.name || projectId}</strong>
+          {projectRoot ? (
+            <>
+              {" · "}
+              <span title={projectRoot}>{projectRoot}</span>
+            </>
+          ) : (
+            <span> · bundled package</span>
+          )}
+        </div>
+      </div>
+
       <header className="hero">
         <div>
           <p className="eyebrow">Elytra Bridge</p>
@@ -329,19 +551,16 @@ export default function App() {
             <span className={`status-dot ${status.sshConnected ? "ok" : ""}`} />
             <strong>{statusLabel}</strong>
             <span>{status.projectName || project?.name || projectId}</span>
+            {(projectRoot || status.openProjectRoot) ? (
+              <small className="muted status-path" title={projectRoot || status.openProjectRoot}>
+                {projectRoot || status.openProjectRoot}
+              </small>
+            ) : null}
           </div>
         </div>
       </header>
 
-      <section className="panel grid two">
-        <label>
-          Project
-          <select value={projectId} onChange={(event) => handleProjectChange(event.target.value)} disabled={busy || status.sshConnected}>
-            {projects.map((item) => (
-              <option key={item.id} value={item.id}>{item.name}</option>
-            ))}
-          </select>
-        </label>
+      <section className="panel connection-panel">
         <label>
           Control mode
           <select value={connectionMode} onChange={(event) => setConnectionMode(event.target.value)} disabled={busy || status.sshConnected}>
@@ -497,7 +716,43 @@ export default function App() {
         </section>
       )}
 
-      {(info || status.lastError) && <section className="notice">{info || status.lastError}</section>}
+      {pathModalOpen && (
+        <div
+          className="modal-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setPathModalOpen(false);
+          }}
+        >
+          <div className="modal" role="dialog" aria-labelledby="open-path-title">
+            <h3 id="open-path-title">Open project by path</h3>
+            <p className="muted modal-help">
+              Absolute path to a folder containing <code>project.yaml</code>, <code>real/</code>, and <code>sim/</code>.
+            </p>
+            <label>
+              Project folder
+              <input
+                autoFocus
+                value={pathDraft}
+                onChange={(event) => setPathDraft(event.target.value)}
+                placeholder="e.g. C:/Users/you/repos/my-drone-package"
+              />
+            </label>
+            <div className="row actions modal-actions">
+              <button type="button" className="secondary" onClick={() => setPathModalOpen(false)}>
+                Cancel
+              </button>
+              <button type="button" onClick={() => void submitOpenProjectPath()} disabled={busy}>
+                Open
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {(info || status.lastError) && (
+        <section className="notice notice-multiline">{info || status.lastError}</section>
+      )}
     </main>
   );
 }

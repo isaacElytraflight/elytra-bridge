@@ -8,6 +8,105 @@ const MODE_ENV_PREFIX = {
   sim: "SIM_DRONE",
 };
 
+/**
+ * Structural validation before opening a project folder from disk (bundled or arbitrary path).
+ * @returns {{ ok: boolean, warnings: string[], errors: string[], root: string, descriptor: Record<string, unknown> }}
+ */
+export async function validateProjectFolder(projectRootInput) {
+  const warnings = [];
+  const errors = [];
+  let root = "";
+  try {
+    root = path.resolve(String(projectRootInput || "").trim());
+  } catch (error) {
+    errors.push(`Invalid path: ${error.message}`);
+    return { ok: false, warnings, errors, root: "", descriptor: {} };
+  }
+
+  if (!root) {
+    errors.push("Project path is empty.");
+    return { ok: false, warnings, errors, root: "", descriptor: {} };
+  }
+
+  let stat;
+  try {
+    stat = await fs.stat(root);
+  } catch {
+    errors.push("Project root does not exist.");
+    return { ok: false, warnings, errors, root, descriptor: {} };
+  }
+  if (!stat.isDirectory()) {
+    errors.push("Project root is not a directory.");
+    return { ok: false, warnings, errors, root, descriptor: {} };
+  }
+
+  const yamlPath = path.join(root, "project.yaml");
+  try {
+    await fs.access(yamlPath);
+  } catch {
+    errors.push("Missing project.yaml");
+    return { ok: false, warnings, errors, root, descriptor: {} };
+  }
+
+  for (const sub of ["real", "sim"]) {
+    const p = path.join(root, sub);
+    try {
+      const st = await fs.stat(p);
+      if (!st.isDirectory()) errors.push(`${sub}/ exists but is not a directory`);
+    } catch {
+      errors.push(`Missing required ${sub}/ directory`);
+    }
+  }
+
+  for (const rel of ["real/.env.example", "sim/.env.example"]) {
+    try {
+      await fs.access(path.join(root, ...rel.split("/")));
+    } catch {
+      warnings.push(`Recommended template missing: ${rel}`);
+    }
+  }
+
+  let descriptor = {};
+  try {
+    const text = await fs.readFile(yamlPath, "utf-8");
+    descriptor = yaml.load(text) || {};
+  } catch (error) {
+    errors.push(`Could not parse project.yaml: ${error.message}`);
+    return { ok: false, warnings, errors, root, descriptor: {} };
+  }
+
+  const simRaw = descriptor.sim || {};
+  if (simRaw.composeFile) {
+    const composeAbs = resolvePath(String(simRaw.composeFile).trim(), root);
+    if (composeAbs) {
+      try {
+        await fs.access(composeAbs);
+      } catch {
+        warnings.push(`sim.composeFile not found at resolved path: ${composeAbs}`);
+      }
+    }
+  }
+
+  async function warnIfRelativeRepoMissing(label, rawPath) {
+    if (!rawPath || typeof rawPath !== "string") return;
+    const trimmed = rawPath.trim();
+    if (!trimmed) return;
+    if (trimmed.startsWith("/")) return;
+    if (/^[A-Za-z]:[\\/]/.test(trimmed)) return;
+    const abs = resolvePath(trimmed, root);
+    if (!abs) return;
+    try {
+      await fs.access(abs);
+    } catch {
+      warnings.push(`${label} not found under project root (${abs})`);
+    }
+  }
+
+  await warnIfRelativeRepoMissing("real.privateKeyPath", descriptor.real?.privateKeyPath);
+
+  return { ok: errors.length === 0, warnings, errors, root, descriptor };
+}
+
 export async function listProjects() {
   const { projectsDir } = appConfig();
   let entries = [];
@@ -32,12 +131,26 @@ export async function listProjects() {
 }
 
 export async function loadProject(projectId = appConfig().defaultProjectId, options = {}) {
-  const safeId = String(projectId || appConfig().defaultProjectId).replace(/[^a-zA-Z0-9_.-]/g, "");
-  const projectRoot = path.join(appConfig().projectsDir, safeId);
-  const descriptorPath = path.join(projectRoot, "project.yaml");
+  const explicitRootRaw = options.projectRoot ? String(options.projectRoot).trim() : "";
+  const explicitRoot = explicitRootRaw ? path.resolve(explicitRootRaw) : "";
+
+  let projectRoot;
+  let descriptorPath;
+  let fallbackId;
+
+  if (explicitRoot) {
+    projectRoot = explicitRoot;
+    descriptorPath = path.join(projectRoot, "project.yaml");
+    fallbackId = path.basename(projectRoot);
+  } else {
+    fallbackId = String(projectId || appConfig().defaultProjectId).replace(/[^a-zA-Z0-9_.-]/g, "");
+    projectRoot = path.join(appConfig().projectsDir, fallbackId);
+    descriptorPath = path.join(projectRoot, "project.yaml");
+  }
+
   const text = await fs.readFile(descriptorPath, "utf-8");
   const descriptor = yaml.load(text) || {};
-  const id = descriptor.id || safeId;
+  const id = descriptor.id || fallbackId;
   const selectedMode = options.mode === "sim" ? "sim" : options.mode === "physical" ? "physical" : "";
   const physicalEnv = selectedMode === "physical" ? readEnvFile(projectModeEnvPath(projectRoot, "physical")) : {};
   const simEnv = selectedMode === "sim" ? readEnvFile(projectModeEnvPath(projectRoot, "sim")) : {};
@@ -46,6 +159,7 @@ export async function loadProject(projectId = appConfig().defaultProjectId, opti
     ...descriptor,
     id,
     root: projectRoot,
+    openProjectRoot: explicitRoot ? projectRoot : "",
     descriptorPath,
     modeEnvPath: selectedMode ? projectModeEnvPath(projectRoot, selectedMode) : "",
     modeEnvLoaded: selectedMode ? Object.keys(selectedMode === "sim" ? simEnv : physicalEnv).length > 0 : false,

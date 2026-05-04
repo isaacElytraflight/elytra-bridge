@@ -3,3 +3,6 @@ node_modules/
 dist/
 .DS_Store
 *.log
+
+# Elytra backend-local UI state (recent projects list)
+application/backend/.elytra/
