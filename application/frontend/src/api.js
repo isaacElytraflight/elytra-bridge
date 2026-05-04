@@ -44,6 +44,11 @@ export const api = {
   stopFlight: () => request("/flight/stop", { method: "POST", body: "{}" }),
   resetSimulation: () => request("/simulation/reset", { method: "POST", body: "{}" }),
   shutdownSimulation: () => request("/simulation/shutdown", { method: "POST", body: "{}" }),
+  hotswapSimulationBranch: ({ branch }) =>
+    request("/sim/hotswap", {
+      method: "POST",
+      body: JSON.stringify({ branch }),
+    }),
   tmuxLog: () => request("/drone/tmux-log"),
   getSettingsEnv: () => request("/settings/env"),
   putSettingsEnv: (updates) => request("/settings/env", { method: "PUT", body: JSON.stringify(updates) }),

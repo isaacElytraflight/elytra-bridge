@@ -6,6 +6,7 @@ import { appConfig, ensureEnvFile, ENV_FILE_PATH, reloadEnv } from "./config.js"
 import { listProjects, loadProject, projectForClient } from "./projectStore.js";
 import { SimTarget } from "./simTarget.js";
 import { SshTarget } from "./sshTarget.js";
+import { validateMissionFilename, validateMissionYaml } from "./missionValidation.js";
 
 ensureEnvFile();
 
@@ -29,13 +30,14 @@ const session = {
   connectTrace: [],
   composePs: "",
   composeLogsTail: "",
+  dockerBuildProgress: idleProgress(),
   simSetupProgress: idleProgress(),
   missionStartupProgress: idleProgress(),
 };
 
 const progress = {
-  update(key, percent, step, detail, complete = false) {
-    session[key] = { percent, step, detail, complete };
+  update(key, percent, step, detail, complete = false, extra = {}) {
+    session[key] = { percent, step, detail, complete, ...extra };
   },
 };
 
@@ -59,14 +61,15 @@ function statusPayload() {
     composeLogsTail: session.composeLogsTail,
     simViewerUrl: session.mode === "sim" ? session.project?.modes?.sim?.novncOrigin || "" : "",
     droneTmuxSession: session.project?.modes?.[session.mode]?.tmuxSession || "elytra_bridge",
+    dockerBuildProgress: session.dockerBuildProgress,
     simSetupProgress: session.simSetupProgress,
     missionStartupProgress: session.missionStartupProgress,
   };
 }
 
 async function setTarget(projectId, mode, password = "") {
-  const project = await loadProject(projectId || session.projectId);
   const selectedMode = normalizeMode(mode);
+  const project = await loadProject(projectId || session.projectId, { mode: selectedMode });
   const modeConfig = project.modes[selectedMode];
   await session.target?.disconnect?.();
 
@@ -78,6 +81,12 @@ async function setTarget(projectId, mode, password = "") {
   session.sshConnected = false;
   session.lastError = "";
   session.connectTrace = [`Selected ${project.name || project.id} (${selectedMode}).`];
+  if (project.modeEnvLoaded) {
+    session.connectTrace.push(`Loaded project env: ${project.modeEnvPath}`);
+  }
+  session.dockerBuildProgress = selectedMode === "sim"
+    ? { percent: 0, step: "Queued", detail: "Waiting for Docker Compose build.", complete: false, count: 0, total: 0 }
+    : idleProgress();
   session.simSetupProgress = selectedMode === "sim"
     ? { percent: 5, step: "Queued", detail: "Preparing simulation.", complete: false }
     : idleProgress();
@@ -103,11 +112,6 @@ function requireConnected() {
   if (!session.target || !session.sshConnected) {
     throw new Error("Connect to a project target before running this action.");
   }
-}
-
-function safeFilename(filename) {
-  const value = String(filename || "mission_ui.yaml").trim();
-  return value.replace(/[^a-zA-Z0-9_.-]/g, "_") || "mission_ui.yaml";
 }
 
 function actionScriptPath(action, modeConfig) {
@@ -178,7 +182,7 @@ app.get("/mission/default", asyncRoute(async (req, res) => {
 }));
 
 app.get("/drone/prefill", asyncRoute(async (_req, res) => {
-  const project = await loadProject(session.projectId);
+  const project = await loadProject(session.projectId, { mode: "physical" });
   res.json({
     physicalSshPassword: project.modes.physical.sshPassword || "",
     simSshPassword: "",
@@ -213,8 +217,13 @@ app.post("/session/disconnect", asyncRoute(async (_req, res) => {
 }));
 
 app.post("/mission/save", asyncRoute(async (req, res) => {
+  const fileValidation = validateMissionFilename(req.body.filename || "");
+  if (!fileValidation.ok) throw new Error(fileValidation.message);
+  const yamlValidation = validateMissionYaml(req.body.yamlText || "");
+  if (!yamlValidation.ok) throw new Error(yamlValidation.message);
+
   requireConnected();
-  const filename = safeFilename(req.body.filename);
+  const filename = fileValidation.filename;
   const yamlText = String(req.body.yamlText || "");
   const remotePath = await session.target.saveMission(filename, yamlText);
   session.savedMissionPath = remotePath;
@@ -247,6 +256,16 @@ app.post("/simulation/reset", asyncRoute(async (_req, res) => {
   res.json({ state: statusPayload() });
 }));
 
+app.post("/sim/reset", asyncRoute(async (_req, res) => {
+  requireConnected();
+  if (session.mode !== "sim") throw new Error("Simulation reset is only available in sim mode.");
+  await session.target.reset();
+  session.inFlight = false;
+  session.runMode = null;
+  session.connectionState = "connected_idle";
+  res.json({ state: statusPayload() });
+}));
+
 app.post("/simulation/shutdown", asyncRoute(async (_req, res) => {
   if (session.mode !== "sim" || !session.target) throw new Error("No simulation target is active.");
   await session.target.shutdown();
@@ -257,19 +276,83 @@ app.post("/simulation/shutdown", asyncRoute(async (_req, res) => {
   res.json({ state: statusPayload() });
 }));
 
+app.post("/sim/shutdown", asyncRoute(async (_req, res) => {
+  if (session.mode !== "sim" || !session.target) throw new Error("No simulation target is active.");
+  await session.target.shutdown();
+  session.sshConnected = false;
+  session.inFlight = false;
+  session.runMode = null;
+  session.connectionState = "disconnected";
+  res.json({ state: statusPayload() });
+}));
+
+app.post("/sim/hotswap", asyncRoute(async (req, res) => {
+  requireConnected();
+  if (session.mode !== "sim") throw new Error("Simulation hotswap is only available in sim mode.");
+  session.connectTrace = [`Simulation hotswap requested (branch=${req.body?.branch || "main"}).`];
+  const result = await session.target.hotswapFromBranch(req.body?.branch || "main");
+  session.connectTrace.push(`Fetched ${result.branch} and rebuilt the scoped ROS workspace in the sim container.`);
+  await session.target.reset();
+  session.inFlight = false;
+  session.runMode = null;
+  session.connectionState = "connected_idle";
+  if (session.target?.diagnostics) {
+    Object.assign(session, await session.target.diagnostics());
+  }
+  res.json({ ok: true, state: statusPayload() });
+}));
+
+app.post("/simulation/hotswap", asyncRoute(async (req, res) => {
+  requireConnected();
+  if (session.mode !== "sim") throw new Error("Simulation hotswap is only available in sim mode.");
+  session.connectTrace = [`Simulation hotswap requested (branch=${req.body?.branch || "main"}).`];
+  const result = await session.target.hotswapFromBranch(req.body?.branch || "main");
+  session.connectTrace.push(`Fetched ${result.branch} and rebuilt the scoped ROS workspace in the sim container.`);
+  await session.target.reset();
+  session.inFlight = false;
+  session.runMode = null;
+  session.connectionState = "connected_idle";
+  if (session.target?.diagnostics) {
+    Object.assign(session, await session.target.diagnostics());
+  }
+  res.json({ ok: true, state: statusPayload() });
+}));
+
 app.get("/drone/tmux-log", asyncRoute(async (_req, res) => {
   requireConnected();
   res.json(await session.target.captureLog());
 }));
 
 const envFields = [
+  ["PORT", "Backend port", false],
   ["DRONE_HOST", "Physical host", false],
+  ["DRONE_PORT", "Physical SSH port", false],
   ["DRONE_USER", "Physical user", false],
   ["DRONE_PRIVATE_KEY_PATH", "Physical private key path", false],
+  ["DRONE_PRIVATE_KEY_PASSPHRASE", "Physical private key passphrase", true],
   ["DRONE_SSH_PASSWORD", "Physical SSH password", true],
+  ["DRONE_START_SCRIPT_PATH", "Physical start script", false],
+  ["DRONE_RECORDING_SCRIPT_PATH", "Physical recording script", false],
+  ["DRONE_MISSION_DIR", "Physical mission directory", false],
+  ["DRONE_ROS_INSTALL", "Physical ROS install setup", false],
+  ["DRONE_TMUX_SESSION", "Physical tmux session", false],
+  ["DRONE_TMUX_CAPTURE_LINES", "Physical tmux capture lines", false],
+  ["DRONE_TMUX_STOP_GRACE_SECONDS", "Physical stop grace seconds", false],
+  ["DRONE_MISSION_EXTRA_ARGS", "Physical mission extra args", false],
   ["SIM_COMPOSE_FILE", "Simulation compose file", false],
+  ["SIM_COMPOSE_PROJECT", "Simulation compose project", false],
   ["SIM_CONTAINER_NAME", "Simulation container name", false],
   ["SIM_NOVNC_ORIGIN", "Simulation noVNC URL", false],
+  ["SIM_DRONE_START_SCRIPT_PATH", "Simulation start script", false],
+  ["SIM_DRONE_RECORDING_SCRIPT_PATH", "Simulation recording script", false],
+  ["SIM_DRONE_MISSION_DIR", "Simulation mission directory", false],
+  ["SIM_DRONE_ROS_INSTALL", "Simulation ROS install setup", false],
+  ["SIM_DRONE_TMUX_SESSION", "Simulation tmux session", false],
+  ["SIM_DRONE_TMUX_CAPTURE_LINES", "Simulation tmux capture lines", false],
+  ["SIM_DRONE_TMUX_STOP_GRACE_SECONDS", "Simulation stop grace seconds", false],
+  ["SIM_DRONE_MISSION_EXTRA_ARGS", "Simulation mission extra args", false],
+  ["SIM_AUTOSTOP_ON_DISCONNECT", "Auto-stop sim on disconnect", false],
+  ["RECONNECT_BACKOFF_MS", "Reconnect backoff ms", false],
 ];
 
 app.get("/settings/env", (_req, res) => {

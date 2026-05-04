@@ -18,7 +18,9 @@ flowchart LR
   backend --> simDriver["Sim handle"]
   backend --> realDriver["Real handle"]
   simDriver --> dockerHost["Docker Compose simulator"]
-  dockerHost --> simContainer["Robot sim container"]
+  dockerHost --> robotImage["Robot image"]
+  simulatorBase["Simulator base image"] --> robotImage
+  robotImage --> simContainer["Robot sim container"]
   realDriver --> sshRobot["Physical robot over SSH"]
   simContainer --> rosWorkspace["Shared ROS 2 workspace"]
   sshRobot --> rosWorkspace
@@ -50,15 +52,22 @@ Each project is a folder that can be copied, versioned, and opened later. The MV
 - `id`, `name`, `robotType`, and `ros.distro`.
 - `sim`: Docker Compose file, container name, noVNC URL, mission paths, tmux session, and script paths.
 - `real`: SSH host/user/key settings, mission paths, tmux session, and script paths.
-- `buttons`: UI labels mapped to action ids and script paths.
+- `buttons`: UI labels mapped to action ids, with runtime scripts stored under `buttons/scripts`.
+
+The Drone 2026 simulator image is split into two Docker layers while still running as one backend-controlled container for the MVP:
+
+- `simulator.Dockerfile`: reusable simulator base with PX4, Gazebo, noVNC/VNC, OS packages, and the `sim` user.
+- `robot.Dockerfile`: project-specific robot image that extends the simulator base with ROS/MAVROS bridge dependencies, the ROS workspace, custom Gazebo assets, sim gimbal camera assets, RViz/image helpers, and mission startup scripts.
+
+This keeps the current `drone-2026-sim` control container compatible with mission save, tmux logs, noVNC, and hotswap behavior while establishing the future boundary between reusable simulator libraries and robot-specific packages.
 
 ## MVP Scope
 
 - React + Vite frontend and Express backend under `application/`.
 - File-backed project discovery from `projects/*/project.yaml`.
-- A bundled `drone-2026` project descriptor.
+- A bundled `drone-2026` project descriptor with layered simulator/robot Docker images.
 - Physical mode over SSH/SFTP/tmux.
-- Simulation mode through Docker Compose plus `docker exec` and `docker cp`.
+- Simulation mode through Docker Compose plus `docker exec` and `docker cp`, using one robot container built from a reusable simulator base.
 - Mission YAML editing and save.
 - noVNC iframe for simulator viewing.
 - tmux output polling.
@@ -106,12 +115,13 @@ sequenceDiagram
 3. Project validation: check descriptor schema, required files, executable scripts, Docker availability, SSH connectivity, and ROS distro assumptions.
 4. Import workflow: let users add simulator packages, robot sim packages, ROS workspaces, real setup packages, and button scripts through the UI.
 5. Multiple sessions: isolate ports, compose project names, tmux sessions, and runtime state so two projects can run at once.
-6. Simulator library: add reusable simulator bases for Gazebo, Isaac Sim, Habitat Sim, and future backends.
+6. Simulator library: generalize the `drone-2026` simulator base pattern into reusable bases for Gazebo, Isaac Sim, Habitat Sim, and future backends.
 7. ROS compatibility: keep ROS 2 Jazzy as the default path, then add ROS 1 Noetic compatibility where the project descriptor requests it.
 
 ## Design Constraints
 
 - Favor drone workflow parity in the first implementation.
+- Keep reusable simulator infrastructure separate from robot-specific assets and bridge code.
 - Treat the ROS workspace as the master copy shared by sim and real.
 - Keep user actions environment-neutral: the selected target prepares the environment, then the action launches the configured script.
 - Store project data in folders so projects can be switched, copied, and eventually run concurrently.

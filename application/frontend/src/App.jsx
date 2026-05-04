@@ -10,6 +10,7 @@ const emptyStatus = {
   mode: "physical",
   simViewerUrl: "",
   lastError: "",
+  dockerBuildProgress: { percent: 0, step: "Idle", detail: "Waiting to start.", complete: false },
   simSetupProgress: { percent: 0, step: "Idle", detail: "Waiting to start.", complete: false },
   missionStartupProgress: { percent: 0, step: "Idle", detail: "Waiting to start.", complete: false },
 };
@@ -20,11 +21,12 @@ function clampPct(value) {
 
 function ProgressBar({ label, progress }) {
   const percent = clampPct(progress?.percent);
+  const countLabel = Number(progress?.total) > 0 ? `[${Number(progress?.count) || 0}/${Number(progress?.total)}]` : "";
   return (
     <div className="progress-block">
       <div className="row split">
         <strong>{label}</strong>
-        <span>{percent}%</span>
+        <span>{countLabel ? `${countLabel} ${percent}%` : `${percent}%`}</span>
       </div>
       <div className="progress">
         <div style={{ width: `${percent}%` }} />
@@ -61,6 +63,8 @@ export default function App() {
   const [envNotice, setEnvNotice] = useState("");
   const [envBusy, setEnvBusy] = useState(false);
   const [theme, setTheme] = useState(getInitialTheme);
+  const [hotswapBusy, setHotswapBusy] = useState(false);
+  const [hotswapStatus, setHotswapStatus] = useState("");
   const tmuxPreRef = useRef(null);
   const followLogRef = useRef(true);
 
@@ -177,6 +181,12 @@ export default function App() {
     setBusy(true);
     setInfo("");
     try {
+      if (action.stopAction && simModeActive) {
+        const result = await api.resetSimulation();
+        if (result.state) setStatus(result.state);
+        setInfo("Simulation mission ended and SITL restarted to its initial state.");
+        return;
+      }
       const body = action.requiresMission ? { remoteMissionPath: savedMissionPath } : {};
       const result = await api.runAction(action.id, body);
       if (result.state) setStatus(result.state);
@@ -201,6 +211,48 @@ export default function App() {
       setInfo(error.message);
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function resetSimulation() {
+    setBusy(true);
+    setInfo("");
+    try {
+      const result = await api.resetSimulation();
+      if (result.state) setStatus(result.state);
+      setInfo("Simulation reset requested.");
+    } catch (error) {
+      if (error.details?.state) setStatus(error.details.state);
+      setInfo(error.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function loadRepoBranch() {
+    if (hotswapBusy || busy) return;
+    const branch = window.prompt("Enter branch to load from UAVs-at-Berkeley/drone-2026", "main");
+    if (branch == null) return;
+    const normalizedBranch = branch.trim();
+    if (!normalizedBranch) {
+      setInfo("Branch name is required.");
+      return;
+    }
+
+    setHotswapBusy(true);
+    setHotswapStatus(`Updating from ${normalizedBranch}...`);
+    setInfo(`Fetching drone-2026 branch ${normalizedBranch} and updating simulation.`);
+    try {
+      const result = await api.hotswapSimulationBranch({ branch: normalizedBranch });
+      if (result.state) setStatus(result.state);
+      setHotswapStatus(`Updated from ${normalizedBranch}.`);
+      setInfo("Repo hotswap complete. Simulation reset complete.");
+    } catch (error) {
+      if (error.details?.state) setStatus(error.details.state);
+      setHotswapStatus(error.message);
+      setInfo(error.message);
+    } finally {
+      setHotswapBusy(false);
     }
   }
 
@@ -254,6 +306,7 @@ export default function App() {
 
   const canSave = status.sshConnected && !busy;
   const simModeActive = (status.mode || connectionMode) === "sim";
+  const canHotswapRepo = simModeActive && status.sshConnected && !busy && !hotswapBusy;
 
   return (
     <main className="app">
@@ -311,9 +364,14 @@ export default function App() {
             {status.sshConnected ? "Connected" : connectionMode === "sim" ? "Start + Connect Simulation" : "Connect"}
           </button>
           {simModeActive && (
-            <button className="secondary" onClick={shutdownSimulation} disabled={busy || !status.sshConnected}>
-              Shutdown Simulation
-            </button>
+            <>
+              <button className="secondary" onClick={resetSimulation} disabled={busy || !status.sshConnected}>
+                Reset Simulation
+              </button>
+              <button className="secondary" onClick={shutdownSimulation} disabled={busy || !status.sshConnected}>
+                Shutdown Simulation
+              </button>
+            </>
           )}
         </div>
       </section>
@@ -340,6 +398,7 @@ export default function App() {
 
       <section className="grid two">
         <div className="panel">
+          <ProgressBar label="Docker build" progress={status.dockerBuildProgress} />
           <ProgressBar label="Simulation setup" progress={status.simSetupProgress} />
           <ProgressBar label="Robot startup" progress={status.missionStartupProgress} />
         </div>
@@ -352,12 +411,26 @@ export default function App() {
                 key={action.id}
                 className={action.stopAction ? "danger" : "secondary"}
                 onClick={() => runAction(action)}
-                disabled={!status.sshConnected || busy || (action.requiresMission && !savedMissionPath)}
+                disabled={
+                  !status.sshConnected ||
+                  busy ||
+                  (action.requiresMission && !savedMissionPath) ||
+                  (!action.stopAction && status.inFlight) ||
+                  (action.stopAction && !status.inFlight)
+                }
                 title={action.description}
               >
                 {action.label}
               </button>
             ))}
+            {simModeActive && (
+              <>
+                <button className="secondary" onClick={loadRepoBranch} disabled={!canHotswapRepo}>
+                  {hotswapBusy ? "Loading Repo Branch..." : "Load Repo Branch"}
+                </button>
+                {hotswapStatus && <span className="hotswap-status">{hotswapStatus}</span>}
+              </>
+            )}
           </div>
         </div>
       </section>
@@ -366,7 +439,13 @@ export default function App() {
         <section className="panel">
           <h2>Simulation View</h2>
           <p className="muted">Live simulator desktop stream from the Docker container through noVNC.</p>
-          <iframe className="novnc" src={resolvedSimViewerUrl} title="Simulation noVNC viewer" />
+          <iframe
+            allow="fullscreen"
+            allowFullScreen
+            className="novnc"
+            src={resolvedSimViewerUrl}
+            title="Simulation noVNC viewer"
+          />
         </section>
       )}
 

@@ -218,9 +218,15 @@ summary {
 }
 
 .button-list {
+  align-items: center;
   display: flex;
   flex-wrap: wrap;
   gap: 0.75rem;
+}
+
+.hotswap-status {
+  color: var(--muted);
+  font-weight: 600;
 }
 
 .progress-block + .progress-block {

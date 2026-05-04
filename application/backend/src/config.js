@@ -15,6 +15,16 @@ export function reloadEnv() {
   dotenv.config({ path: ENV_FILE_PATH, override: true });
 }
 
+export function readEnvFile(filePath) {
+  if (!filePath || !fs.existsSync(filePath)) return {};
+  return dotenv.parse(fs.readFileSync(filePath));
+}
+
+export function projectModeEnvPath(projectRoot, mode) {
+  const folder = mode === "sim" ? "sim" : "real";
+  return path.join(projectRoot, folder, ".env");
+}
+
 export function appConfig() {
   const configuredProjectsDir = process.env.PROJECTS_DIR || "";
   return {
@@ -42,8 +52,20 @@ export function envValue(key, fallback = "") {
   return value == null || value === "" ? fallback : value;
 }
 
+export function envValueFrom(env, key, fallback = "") {
+  const value = env && key in env ? env[key] : process.env[key];
+  return value == null || value === "" ? fallback : value;
+}
+
 export function envNumber(key, fallback) {
   const raw = process.env[key];
+  if (raw == null || raw === "") return fallback;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+export function envNumberFrom(env, key, fallback) {
+  const raw = env && key in env ? env[key] : process.env[key];
   if (raw == null || raw === "") return fallback;
   const parsed = Number(raw);
   return Number.isFinite(parsed) ? parsed : fallback;

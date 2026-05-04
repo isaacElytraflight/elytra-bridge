@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import yaml from "js-yaml";
-import { appConfig, envNumber, envValue, resolvePath } from "./config.js";
+import { appConfig, envNumberFrom, envValueFrom, projectModeEnvPath, readEnvFile, resolvePath } from "./config.js";
 
 const MODE_ENV_PREFIX = {
   physical: "DRONE",
@@ -31,22 +31,27 @@ export async function listProjects() {
   return projects.sort((a, b) => a.name.localeCompare(b.name));
 }
 
-export async function loadProject(projectId = appConfig().defaultProjectId) {
+export async function loadProject(projectId = appConfig().defaultProjectId, options = {}) {
   const safeId = String(projectId || appConfig().defaultProjectId).replace(/[^a-zA-Z0-9_.-]/g, "");
   const projectRoot = path.join(appConfig().projectsDir, safeId);
   const descriptorPath = path.join(projectRoot, "project.yaml");
   const text = await fs.readFile(descriptorPath, "utf-8");
   const descriptor = yaml.load(text) || {};
   const id = descriptor.id || safeId;
+  const selectedMode = options.mode === "sim" ? "sim" : options.mode === "physical" ? "physical" : "";
+  const physicalEnv = selectedMode === "physical" ? readEnvFile(projectModeEnvPath(projectRoot, "physical")) : {};
+  const simEnv = selectedMode === "sim" ? readEnvFile(projectModeEnvPath(projectRoot, "sim")) : {};
 
   return {
     ...descriptor,
     id,
     root: projectRoot,
     descriptorPath,
+    modeEnvPath: selectedMode ? projectModeEnvPath(projectRoot, selectedMode) : "",
+    modeEnvLoaded: selectedMode ? Object.keys(selectedMode === "sim" ? simEnv : physicalEnv).length > 0 : false,
     modes: {
-      physical: buildPhysicalConfig(descriptor, projectRoot),
-      sim: buildSimConfig(descriptor, projectRoot),
+      physical: buildPhysicalConfig(descriptor, projectRoot, physicalEnv),
+      sim: buildSimConfig(descriptor, projectRoot, simEnv),
     },
     buttons: Array.isArray(descriptor.buttons) ? descriptor.buttons : [],
   };
@@ -62,47 +67,47 @@ export function toProjectSummary(project) {
   };
 }
 
-function buildCommonModeConfig(raw = {}, prefix) {
+function buildCommonModeConfig(raw = {}, prefix, env = {}) {
   return {
-    missionDir: envValue(`${prefix}_MISSION_DIR`, raw.missionDir || ""),
-    rosInstallSetupPath: envValue(`${prefix}_ROS_INSTALL`, raw.rosInstallSetupPath || ""),
-    tmuxSession: envValue(`${prefix}_TMUX_SESSION`, raw.tmuxSession || "elytra_bridge"),
-    tmuxCaptureLines: Math.max(100, envNumber(`${prefix}_TMUX_CAPTURE_LINES`, raw.tmuxCaptureLines || 2500)),
-    tmuxStopGraceSeconds: Math.max(0, envNumber(`${prefix}_TMUX_STOP_GRACE_SECONDS`, raw.tmuxStopGraceSeconds || 20)),
-    missionExtraArgs: envValue(`${prefix}_MISSION_EXTRA_ARGS`, raw.missionExtraArgs || ""),
-    startScriptPath: envValue(`${prefix}_START_SCRIPT_PATH`, raw.startScriptPath || ""),
-    recordingScriptPath: envValue(`${prefix}_RECORDING_SCRIPT_PATH`, raw.recordingScriptPath || ""),
+    missionDir: envValueFrom(env, `${prefix}_MISSION_DIR`, raw.missionDir || ""),
+    rosInstallSetupPath: envValueFrom(env, `${prefix}_ROS_INSTALL`, raw.rosInstallSetupPath || ""),
+    tmuxSession: envValueFrom(env, `${prefix}_TMUX_SESSION`, raw.tmuxSession || "elytra_bridge"),
+    tmuxCaptureLines: Math.max(100, envNumberFrom(env, `${prefix}_TMUX_CAPTURE_LINES`, raw.tmuxCaptureLines || 2500)),
+    tmuxStopGraceSeconds: Math.max(0, envNumberFrom(env, `${prefix}_TMUX_STOP_GRACE_SECONDS`, raw.tmuxStopGraceSeconds || 20)),
+    missionExtraArgs: envValueFrom(env, `${prefix}_MISSION_EXTRA_ARGS`, raw.missionExtraArgs || ""),
+    startScriptPath: envValueFrom(env, `${prefix}_START_SCRIPT_PATH`, raw.startScriptPath || ""),
+    recordingScriptPath: envValueFrom(env, `${prefix}_RECORDING_SCRIPT_PATH`, raw.recordingScriptPath || ""),
     actions: raw.actions || {},
   };
 }
 
-function buildPhysicalConfig(descriptor, projectRoot) {
+function buildPhysicalConfig(descriptor, projectRoot, env = {}) {
   const raw = descriptor.real || {};
-  const common = buildCommonModeConfig(raw, MODE_ENV_PREFIX.physical);
+  const common = buildCommonModeConfig(raw, MODE_ENV_PREFIX.physical, env);
   return {
     ...common,
     mode: "physical",
-    host: envValue("DRONE_HOST", raw.host || ""),
-    port: envNumber("DRONE_PORT", raw.port || 22),
-    user: envValue("DRONE_USER", raw.user || ""),
-    privateKeyPath: resolvePath(envValue("DRONE_PRIVATE_KEY_PATH", raw.privateKeyPath || ""), projectRoot),
-    privateKeyPassphrase: envValue("DRONE_PRIVATE_KEY_PASSPHRASE", raw.privateKeyPassphrase || ""),
-    sshPassword: envValue("DRONE_SSH_PASSWORD", raw.sshPassword || ""),
+    host: envValueFrom(env, "DRONE_HOST", raw.host || ""),
+    port: envNumberFrom(env, "DRONE_PORT", raw.port || 22),
+    user: envValueFrom(env, "DRONE_USER", raw.user || ""),
+    privateKeyPath: resolvePath(envValueFrom(env, "DRONE_PRIVATE_KEY_PATH", raw.privateKeyPath || ""), projectRoot),
+    privateKeyPassphrase: envValueFrom(env, "DRONE_PRIVATE_KEY_PASSPHRASE", raw.privateKeyPassphrase || ""),
+    sshPassword: envValueFrom(env, "DRONE_SSH_PASSWORD", raw.sshPassword || ""),
     novncOrigin: "",
   };
 }
 
-function buildSimConfig(descriptor, projectRoot) {
+function buildSimConfig(descriptor, projectRoot, env = {}) {
   const raw = descriptor.sim || {};
-  const common = buildCommonModeConfig(raw, MODE_ENV_PREFIX.sim);
+  const common = buildCommonModeConfig(raw, MODE_ENV_PREFIX.sim, env);
   return {
     ...common,
     mode: "sim",
-    composeFile: resolvePath(envValue("SIM_COMPOSE_FILE", raw.composeFile || ""), projectRoot),
-    composeProject: envValue("SIM_COMPOSE_PROJECT", raw.composeProject || ""),
-    containerName: envValue("SIM_CONTAINER_NAME", raw.containerName || ""),
-    novncOrigin: envValue("SIM_NOVNC_ORIGIN", raw.novncOrigin || ""),
-    autoStopOnDisconnect: envValue("SIM_AUTOSTOP_ON_DISCONNECT", raw.autoStopOnDisconnect ? "1" : "0") === "1",
+    composeFile: resolvePath(envValueFrom(env, "SIM_COMPOSE_FILE", raw.composeFile || ""), projectRoot),
+    composeProject: envValueFrom(env, "SIM_COMPOSE_PROJECT", raw.composeProject || ""),
+    containerName: envValueFrom(env, "SIM_CONTAINER_NAME", raw.containerName || ""),
+    novncOrigin: envValueFrom(env, "SIM_NOVNC_ORIGIN", raw.novncOrigin || ""),
+    autoStopOnDisconnect: envValueFrom(env, "SIM_AUTOSTOP_ON_DISCONNECT", raw.autoStopOnDisconnect ? "1" : "0") === "1",
   };
 }
 

@@ -9,7 +9,7 @@ Elytra Bridge lets a project describe the pieces needed to run the same ROS work
 - `docs/architecture-roadmap.md` - design doc, diagrams, and roadmap.
 - `application/frontend` - React + Vite operator UI.
 - `application/backend` - Express backend for project loading, SSH/tmux control, Docker simulation control, mission saves, and logs.
-- `projects/drone-2026/project.yaml` - first file-backed project descriptor.
+- `projects/drone-2026` - vendored Drone 2026 compatibility package with sim, ROS, real setup, docs, and action scripts.
 
 ## Run Locally
 
@@ -19,13 +19,21 @@ npm install
 npm run dev
 ```
 
+Or use a root launcher from `scripts/run-elytra-bridge-ui/`:
+
+- `run-elytra-bridge-ui.bat` for Windows Command Prompt
+- `run-elytra-bridge-ui.ps1` for Windows PowerShell
+- `run-elytra-bridge-ui.sh` for macOS/Linux/Git Bash
+
 Default URLs:
 
 - Frontend: `http://localhost:5173`
 - Backend: `http://localhost:8787`
 
-Copy `application/backend/.env.example` to `application/backend/.env` if you want to override physical SSH or simulation Docker settings. The backend creates that file from the example on first start if it does not exist.
+Copy `application/backend/.env.example` to `application/backend/.env` for app-wide defaults. Project mode env files can live beside the project package: when you connect in real mode, the backend loads `projects/<project-id>/real/.env`; when you connect in sim mode, it loads `projects/<project-id>/sim/.env`. Values from the selected mode env file override `application/backend/.env`, and `project.yaml` remains the fallback.
 
 ## Drone Compatibility Notes
 
-The bundled project expects the same target paths as `UAVs-at-Berkeley/drone-2026`. For simulation, set `SIM_COMPOSE_FILE` to the reference repo's `SITL/web-sim/docker-compose.yml` if it is not checked out at the default relative path.
+The bundled project vendors the behavior-bearing assets from `UAVs-at-Berkeley/drone-2026` under `projects/drone-2026`. Simulation uses `projects/drone-2026/sim/docker/docker-compose.yml` by default; leave `SIM_COMPOSE_FILE` unset unless you need to override that package-local compose file.
+
+Project-specific env templates live at `projects/drone-2026/real/.env.example` and `projects/drone-2026/sim/.env.example`.
