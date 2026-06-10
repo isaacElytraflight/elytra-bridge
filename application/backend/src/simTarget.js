@@ -262,6 +262,17 @@ export class SimTarget {
 
   async disconnect() {}
 
+  /** Cheap liveness probe used to re-adopt a session after a backend restart. */
+  async isContainerRunning() {
+    if (!this.config.containerName) return false;
+    try {
+      const { stdout } = await runFile("docker", ["inspect", "-f", "{{.State.Running}}", this.config.containerName], { timeout: 15000 });
+      return stdout.trim() === "true";
+    } catch {
+      return false;
+    }
+  }
+
   async exec(command, { user = "" } = {}) {
     const args = ["exec"];
     if (user) args.push("-u", user);

@@ -7,6 +7,7 @@ import { appConfig, ensureEnvFile, ENV_FILE_PATH, reloadEnv } from "./config.js"
 import { pickProjectFolderNative } from "./folderPicker.js";
 import { readRecentProjects, upsertRecentProject, removeRecentProject } from "./recentProjectsStore.js";
 import { listProjects, loadProject, projectForClient, validateProjectFolder } from "./projectStore.js";
+import { readSessionState, writeSessionState, clearSessionState } from "./sessionStore.js";
 import { SimTarget } from "./simTarget.js";
 import { SshTarget } from "./sshTarget.js";
 import { validateMissionFilename, validateMissionYaml } from "./missionValidation.js";
@@ -106,6 +107,7 @@ async function setTarget(projectId, mode, password = "", openProjectRoot = "") {
     session.sshConnected = true;
     session.connectionState = "connected_idle";
     session.connectTrace.push(selectedMode === "sim" ? "Docker simulation connected." : "SSH connection established.");
+    await writeSessionState({ projectId: project.id, projectRoot: session.openProjectRoot, mode: selectedMode }).catch(() => {});
   } catch (error) {
     session.connectionState = "disconnected";
     session.sshConnected = false;
@@ -326,6 +328,7 @@ app.post("/session/disconnect", asyncRoute(async (_req, res) => {
     await session.target?.shutdown?.();
   }
   await session.target?.disconnect?.();
+  await clearSessionState().catch(() => {});
   session.target = null;
   session.sshConnected = false;
   session.inFlight = false;
@@ -387,6 +390,7 @@ app.post("/sim/reset", asyncRoute(async (_req, res) => {
 app.post("/simulation/shutdown", asyncRoute(async (_req, res) => {
   if (session.mode !== "sim" || !session.target) throw new Error("No simulation target is active.");
   await session.target.shutdown();
+  await clearSessionState().catch(() => {});
   session.sshConnected = false;
   session.inFlight = false;
   session.runMode = null;
@@ -397,6 +401,7 @@ app.post("/simulation/shutdown", asyncRoute(async (_req, res) => {
 app.post("/sim/shutdown", asyncRoute(async (_req, res) => {
   if (session.mode !== "sim" || !session.target) throw new Error("No simulation target is active.");
   await session.target.shutdown();
+  await clearSessionState().catch(() => {});
   session.sshConnected = false;
   session.inFlight = false;
   session.runMode = null;
@@ -515,6 +520,43 @@ app.put("/settings/env", asyncRoute(async (req, res) => {
   res.json({ message: "Saved backend .env." });
 }));
 
-app.listen(appConfig().port, () => {
+/**
+ * Re-adopt a still-running simulation after a backend restart. Without this,
+ * every restart (dev watch mode, crash) wipes the in-memory session and the UI
+ * reverts to the default project even though the sim container is still up.
+ */
+async function restorePersistedSession() {
+  const saved = await readSessionState();
+  if (!saved || saved.mode !== "sim") return;
+  try {
+    const project = await loadProject(saved.projectId, {
+      mode: "sim",
+      ...(saved.projectRoot ? { projectRoot: saved.projectRoot } : {}),
+    });
+    const target = new SimTarget(project.modes.sim, progress);
+    if (!(await target.isContainerRunning())) {
+      await clearSessionState().catch(() => {});
+      return;
+    }
+    session.projectId = project.id;
+    session.openProjectRoot = project.openProjectRoot || "";
+    session.project = project;
+    session.mode = "sim";
+    session.target = target;
+    session.sshConnected = true;
+    session.connectionState = "connected_idle";
+    session.connectTrace = [
+      `Re-adopted running simulation for ${project.name || project.id} after backend restart.`,
+    ];
+    progress.update("simSetupProgress", 100, "Connected", "Simulation container is available.", true);
+    console.log(`Re-adopted running sim session: ${project.id} (${project.modes.sim.containerName})`);
+  } catch (error) {
+    console.warn(`Could not re-adopt persisted session: ${error.message}`);
+    await clearSessionState().catch(() => {});
+  }
+}
+
+app.listen(appConfig().port, async () => {
   console.log(`Elytra Bridge backend listening on http://localhost:${appConfig().port}`);
+  await restorePersistedSession();
 });
