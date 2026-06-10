@@ -43,6 +43,10 @@ function getInitialTheme() {
   return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
 
+function normalizeProjectPath(value) {
+  return String(value || "").replace(/\\/g, "/").replace(/\/$/, "").toLowerCase();
+}
+
 export default function App() {
   const [projects, setProjects] = useState([]);
   const [recentProjects, setRecentProjects] = useState([]);
@@ -72,6 +76,7 @@ export default function App() {
   const [hotswapBusy, setHotswapBusy] = useState(false);
   const [hotswapStatus, setHotswapStatus] = useState("");
   const tmuxPreRef = useRef(null);
+  const tmuxLogRef = useRef("");
   const followLogRef = useRef(true);
   const menuRef = useRef(null);
 
@@ -91,6 +96,22 @@ export default function App() {
       if (cancelled) return;
       setProjects(data.projects || []);
       setRecentProjects(data.recentProjects || []);
+
+      // Prefer the backend's live session over the bundled default. boot() used
+      // to always load drone-2026 and could finish *after* a status sync, wiping
+      // the connected project's buttons/mission back to the default.
+      try {
+        const initialStatus = await api.status();
+        if (cancelled) return;
+        setStatus(initialStatus);
+        if (initialStatus.sshConnected && initialStatus.connectedProject) {
+          await adoptConnectedProject(initialStatus);
+          return;
+        }
+      } catch {
+        // Backend unreachable — fall through to bundled default.
+      }
+
       const selected = data.defaultProjectId || data.projects?.[0]?.id || "drone-2026";
       setProjectId(selected);
       setProjectRoot("");
@@ -100,7 +121,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- boot runs once; loadProject defined below
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- boot runs once
   }, []);
 
   useEffect(() => {
@@ -120,33 +141,18 @@ export default function App() {
     return () => clearInterval(id);
   }, []);
 
-  // Keep the locally-loaded project (buttons, mission, description) in sync
-  // with the backend's connected session. Without this, reloading the UI (or a
-  // second client connecting) shows the connected project's name in the status
-  // card while rendering the default project's buttons and mission YAML.
-  const projectSyncRef = useRef(false);
+  // Keep buttons/mission aligned with the backend session (reloads, other tabs).
   useEffect(() => {
-    if (!status.sshConnected || busy || projectSyncRef.current) return;
-    const statusRoot = status.openProjectRoot || "";
+    if (!status.sshConnected || !status.connectedProject || busy) return;
+    const statusRoot = normalizeProjectPath(status.openProjectRoot);
+    const localRoot = normalizeProjectPath(projectRoot);
     const mismatch =
-      (status.projectId && status.projectId !== projectId) ||
-      statusRoot !== (projectRoot || "");
+      status.connectedProject.id !== projectId ||
+      statusRoot !== localRoot;
     if (!mismatch) return;
-    projectSyncRef.current = true;
-    (async () => {
-      try {
-        await loadProject(status.projectId, statusRoot);
-        setConnectionMode(status.mode === "sim" ? "sim" : "physical");
-        setSavedMissionPath(status.savedMissionPath || "");
-        setInfo(`Synced to connected project: ${status.projectName || status.projectId}`);
-      } catch (error) {
-        setInfo(`Could not sync to connected project: ${error.message}`);
-      } finally {
-        projectSyncRef.current = false;
-      }
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- loadProject identity is stable enough for this sync
-  }, [status.sshConnected, status.projectId, status.openProjectRoot, projectId, projectRoot, busy]);
+    void adoptConnectedProject(status);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status.sshConnected, status.connectedProject, status.openProjectRoot, status.mode, projectId, projectRoot, busy]);
 
   useEffect(() => {
     if (!status.sshConnected || tmuxLogPaused) return undefined;
@@ -155,8 +161,21 @@ export default function App() {
       try {
         const data = await api.tmuxLog();
         if (cancelled) return;
-        setTmuxLog(data.text || "");
-        setTmuxLogNote(data.hasSession ? "" : "No tmux session yet. Run an action to see output.");
+        if (data.text?.trim()) {
+          tmuxLogRef.current = data.text;
+          setTmuxLog(data.text);
+          setTmuxLogNote(
+            data.hasSession && !data.stale
+              ? ""
+              : "Session ended — showing last captured output.",
+          );
+        } else if (!data.hasSession) {
+          setTmuxLogNote(
+            tmuxLogRef.current.trim()
+              ? "Session ended — showing last captured output."
+              : "No tmux session yet. Run an action to see output.",
+          );
+        }
         if (followLogRef.current && tmuxPreRef.current) {
           tmuxPreRef.current.scrollTop = tmuxPreRef.current.scrollHeight;
         }
@@ -180,6 +199,20 @@ export default function App() {
     setProjectId(data.project.id);
     setProjectRoot(data.openProjectRoot || "");
     const mission = await api.defaultMission(data.project.id, rootArg);
+    setMissionName(mission.filename || "mission_ui.yaml");
+    setMissionYaml(mission.yamlText || "mission:\n  steps: []\n");
+  }
+
+  async function adoptConnectedProject(nextStatus) {
+    const connected = nextStatus.connectedProject;
+    if (!connected) return;
+    const root = nextStatus.openProjectRoot || "";
+    setProject(connected);
+    setProjectId(connected.id);
+    setProjectRoot(root);
+    setConnectionMode(nextStatus.mode === "sim" ? "sim" : "physical");
+    setSavedMissionPath(nextStatus.savedMissionPath || "");
+    const mission = await api.defaultMission(connected.id, root || undefined);
     setMissionName(mission.filename || "mission_ui.yaml");
     setMissionYaml(mission.yamlText || "mission:\n  steps: []\n");
   }
@@ -269,6 +302,21 @@ export default function App() {
       setRecentProjects(data.recentProjects || []);
     } catch (error) {
       setInfo(error.message);
+    }
+  }
+
+  async function copyTmuxLog() {
+    const lines = (tmuxLogRef.current || tmuxLog || "").split(/\r?\n/);
+    const tail = lines.slice(-1000).join("\n");
+    if (!tail.trim()) {
+      setInfo("No tmux output to copy.");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(tail);
+      setInfo(`Copied last ${Math.min(1000, lines.length)} line(s) to clipboard.`);
+    } catch (error) {
+      setInfo(`Could not copy to clipboard: ${error.message}`);
     }
   }
 
@@ -725,6 +773,9 @@ export default function App() {
           <div className="row split">
             <h2>tmux Output</h2>
             <div className="row">
+              <button type="button" className="secondary" onClick={() => void copyTmuxLog()} disabled={!tmuxLog.trim()}>
+                Copy last 1000 lines
+              </button>
               <label className="check"><input type="checkbox" checked={tmuxLogPaused} onChange={(event) => setTmuxLogPaused(event.target.checked)} /> Pause</label>
               <label className="check"><input type="checkbox" checked={followLog} onChange={(event) => setFollowLog(event.target.checked)} /> Auto-scroll</label>
             </div>

@@ -38,6 +38,7 @@ const session = {
   dockerBuildProgress: idleProgress(),
   simSetupProgress: idleProgress(),
   missionStartupProgress: idleProgress(),
+  lastTmuxLog: "",
 };
 
 const progress = {
@@ -50,11 +51,16 @@ function normalizeMode(mode) {
   return mode === "sim" ? "sim" : "physical";
 }
 
+function normalizeProjectPath(value) {
+  return String(value || "").replace(/\\/g, "/").replace(/\/$/, "").toLowerCase();
+}
+
 function statusPayload() {
   return {
     projectId: session.projectId,
     openProjectRoot: session.openProjectRoot || "",
     projectName: session.project?.name || session.projectId,
+    connectedProject: session.sshConnected && session.project ? projectForClient(session.project) : null,
     connectionState: session.connectionState,
     sshConnected: session.sshConnected,
     inFlight: session.inFlight,
@@ -444,6 +450,12 @@ app.post("/simulation/hotswap", asyncRoute(async (req, res) => {
 app.get("/drone/tmux-log", asyncRoute(async (_req, res) => {
   requireConnected();
   const log = await session.target.captureLog();
+  if (log.text?.trim()) {
+    session.lastTmuxLog = log.text;
+  } else if (session.lastTmuxLog) {
+    log.text = session.lastTmuxLog;
+    log.stale = true;
+  }
   // Scripts can finish (or die) on their own, ending the tmux session. Without
   // this reconciliation the session stays "in flight" forever, leaving start
   // buttons disabled and the stop button armed for a run that no longer exists.
