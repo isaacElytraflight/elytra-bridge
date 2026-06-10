@@ -438,7 +438,16 @@ app.post("/simulation/hotswap", asyncRoute(async (req, res) => {
 
 app.get("/drone/tmux-log", asyncRoute(async (_req, res) => {
   requireConnected();
-  res.json(await session.target.captureLog());
+  const log = await session.target.captureLog();
+  // Scripts can finish (or die) on their own, ending the tmux session. Without
+  // this reconciliation the session stays "in flight" forever, leaving start
+  // buttons disabled and the stop button armed for a run that no longer exists.
+  if (session.inFlight && !log.hasSession) {
+    session.inFlight = false;
+    session.runMode = null;
+    session.connectionState = "connected_idle";
+  }
+  res.json(log);
 }));
 
 const envFields = [

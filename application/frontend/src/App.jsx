@@ -120,6 +120,34 @@ export default function App() {
     return () => clearInterval(id);
   }, []);
 
+  // Keep the locally-loaded project (buttons, mission, description) in sync
+  // with the backend's connected session. Without this, reloading the UI (or a
+  // second client connecting) shows the connected project's name in the status
+  // card while rendering the default project's buttons and mission YAML.
+  const projectSyncRef = useRef(false);
+  useEffect(() => {
+    if (!status.sshConnected || busy || projectSyncRef.current) return;
+    const statusRoot = status.openProjectRoot || "";
+    const mismatch =
+      (status.projectId && status.projectId !== projectId) ||
+      statusRoot !== (projectRoot || "");
+    if (!mismatch) return;
+    projectSyncRef.current = true;
+    (async () => {
+      try {
+        await loadProject(status.projectId, statusRoot);
+        setConnectionMode(status.mode === "sim" ? "sim" : "physical");
+        setSavedMissionPath(status.savedMissionPath || "");
+        setInfo(`Synced to connected project: ${status.projectName || status.projectId}`);
+      } catch (error) {
+        setInfo(`Could not sync to connected project: ${error.message}`);
+      } finally {
+        projectSyncRef.current = false;
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- loadProject identity is stable enough for this sync
+  }, [status.sshConnected, status.projectId, status.openProjectRoot, projectId, projectRoot, busy]);
+
   useEffect(() => {
     if (!status.sshConnected || tmuxLogPaused) return undefined;
     let cancelled = false;
