@@ -194,10 +194,11 @@ export class SimTarget {
         args: this.composeProfileArgs("build", ["build", "--progress=plain", "simulator-base"]),
       });
     }
+    const composeService = this.config.composeService || "sim";
     steps.push({
-      label: "sim",
-      detail: "Building Drone 2026 robot image.",
-      args: this.composeArgs(["build", "--progress=plain", "sim"]),
+      label: composeService,
+      detail: `Building ${composeService} image.`,
+      args: this.composeArgs(["build", "--progress=plain", composeService]),
     });
 
     this.progress.update("dockerBuildProgress", 0, "Queued", "Docker Compose build queued.", false, {
@@ -283,23 +284,30 @@ export class SimTarget {
 
   async runScript(scriptPath, { remoteMissionPath = "", extraArgs = "" } = {}) {
     const session = this.config.tmuxSession;
-    const simUser = this.config.user || "sim";
-    const simHome = `/home/${simUser}`;
+    // Empty user = the container's default user (project-agnostic). Only
+    // override HOME/USER when a user is explicitly configured.
+    const simUser = this.config.user || "";
+    const simHome = simUser ? `/home/${simUser}` : "";
     const mission = remoteMissionPath ? ` ${shellQuote(remoteMissionPath)}` : "";
     const args = extraArgs || this.config.missionExtraArgs || "";
-    const envExports = [
-      ["HOME", simHome],
-      ["USER", simUser],
+    const exports = [
       ["ELYTRA_TARGET", "sim"],
       ["ELYTRA_ROS_DISTRO", "jazzy"],
-      ["DRONE_ROS_INSTALL", this.config.rosInstallSetupPath || `${simHome}/drone_workspace/drone-2026/ros_workspace/install/setup.bash`],
       ["DRONE_MISSION_EXTRA_ARGS", args],
       ["PASSIVE_CAMERA_EXTRA_ARGS", args],
-      ["MAVROS_FCU_URL", "udp://:14540@"],
-      ["BAG_DIR", `${simHome}/drone_workspace/bags`],
-    ]
-      .map(([key, value]) => `export ${key}=${shellQuote(value)};`)
-      .join(" ");
+    ];
+    if (simUser) {
+      exports.unshift(["HOME", simHome], ["USER", simUser]);
+    }
+    // ROS-specific exports only apply to projects that declare a ROS install.
+    if (this.config.rosInstallSetupPath) {
+      exports.push(
+        ["DRONE_ROS_INSTALL", this.config.rosInstallSetupPath],
+        ["MAVROS_FCU_URL", "udp://:14540@"],
+        ["BAG_DIR", `${simHome || "/root"}/drone_workspace/bags`],
+      );
+    }
+    const envExports = exports.map(([key, value]) => `export ${key}=${shellQuote(value)};`).join(" ");
     const command = `${envExports} bash ${shellQuote(scriptPath)}${mission}${args ? ` ${args}` : ""}`;
     await this.exec(`tmux kill-session -t ${shellQuote(session)} 2>/dev/null || true`, { user: simUser });
     await this.exec(`tmux new-session -d -s ${shellQuote(session)} ${shellQuote(`bash -lc ${shellQuote(command)}`)}`, { user: simUser });
@@ -307,9 +315,10 @@ export class SimTarget {
 
   async stop() {
     const session = this.config.tmuxSession;
-    await this.exec(`tmux send-keys -t ${shellQuote(session)} C-c 2>/dev/null || true`, { user: "sim" });
+    const simUser = this.config.user || "";
+    await this.exec(`tmux send-keys -t ${shellQuote(session)} C-c 2>/dev/null || true`, { user: simUser });
     await sleep(this.config.tmuxStopGraceSeconds * 1000);
-    await this.exec(`tmux kill-session -t ${shellQuote(session)} 2>/dev/null || true`, { user: "sim" });
+    await this.exec(`tmux kill-session -t ${shellQuote(session)} 2>/dev/null || true`, { user: simUser });
   }
 
   async reset() {
@@ -327,7 +336,7 @@ export class SimTarget {
 
   async captureLog() {
     try {
-      const { stdout } = await this.exec(`tmux capture-pane -pt ${shellQuote(this.config.tmuxSession)} -S -${this.config.tmuxCaptureLines} 2>/dev/null || true`, { user: "sim" });
+      const { stdout } = await this.exec(`tmux capture-pane -pt ${shellQuote(this.config.tmuxSession)} -S -${this.config.tmuxCaptureLines} 2>/dev/null || true`, { user: this.config.user || "" });
       return { text: stdout, hasSession: Boolean(stdout) };
     } catch {
       return { text: "", hasSession: false };
@@ -422,7 +431,7 @@ export class SimTarget {
         targetPath,
         targetParent: path.posix.dirname(targetPath),
         stagingPath: `${targetPath}.new`,
-        backupPath: path.posix.join(backupRoot, relPath),
+        backupPath: path.posix.join(backupRoot, targetRelPath),
       });
     }
 

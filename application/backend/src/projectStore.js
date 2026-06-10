@@ -219,7 +219,11 @@ function buildSimConfig(descriptor, projectRoot, env = {}) {
     mode: "sim",
     composeFile: resolvePath(envValueFrom(env, "SIM_COMPOSE_FILE", raw.composeFile || ""), projectRoot),
     composeProject: envValueFrom(env, "SIM_COMPOSE_PROJECT", raw.composeProject || ""),
+    composeService: envValueFrom(env, "SIM_COMPOSE_SERVICE", raw.composeService || "sim"),
     containerName: envValueFrom(env, "SIM_CONTAINER_NAME", raw.containerName || ""),
+    // Container user for docker exec. Empty means the container's default user
+    // (e.g. root); "sim" preserved as drone-2026's convention via project.yaml.
+    user: envValueFrom(env, "SIM_USER", raw.user || ""),
     novncOrigin: envValueFrom(env, "SIM_NOVNC_ORIGIN", raw.novncOrigin || ""),
     autoStopOnDisconnect: envValueFrom(env, "SIM_AUTOSTOP_ON_DISCONNECT", raw.autoStopOnDisconnect ? "1" : "0") === "1",
   };
