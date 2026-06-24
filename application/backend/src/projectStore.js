@@ -244,6 +244,7 @@ export function projectForClient(project) {
       description: button.description || "",
       requiresMission: Boolean(button.requiresMission),
       stopAction: Boolean(button.stopAction),
+      resetOnStop: Boolean(button.resetOnStop),
     })),
   };
 }

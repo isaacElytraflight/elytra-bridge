@@ -126,6 +126,35 @@ async function setTarget(projectId, mode, password = "", openProjectRoot = "") {
   }
 }
 
+async function persistSessionState() {
+  if (!session.projectId) return;
+  await writeSessionState({
+    projectId: session.projectId,
+    projectRoot: session.openProjectRoot,
+    mode: session.mode,
+    inFlight: session.inFlight,
+    runMode: session.runMode,
+  }).catch(() => {});
+}
+
+/** Sync inFlight with the target (tmux script probe). Fixes UI after backend restart. */
+async function reconcileInFlightFromTarget() {
+  if (!session.target || !session.sshConnected) return;
+  if (typeof session.target.isScriptRunning !== "function") return;
+  const running = await session.target.isScriptRunning();
+  if (running && !session.inFlight) {
+    session.inFlight = true;
+    session.runMode = session.runMode || "reconciled";
+    session.connectionState = "reconnected_in_flight";
+    await persistSessionState();
+  } else if (!running && session.inFlight) {
+    session.inFlight = false;
+    session.runMode = null;
+    session.connectionState = "connected_idle";
+    await persistSessionState();
+  }
+}
+
 function requireConnected() {
   if (!session.target || !session.sshConnected) {
     throw new Error("Connect to a project target before running this action.");
@@ -150,6 +179,7 @@ async function runProjectAction(actionId, body = {}) {
     session.inFlight = false;
     session.runMode = null;
     session.connectionState = "connected_idle";
+    await persistSessionState();
     return { state: statusPayload() };
   }
 
@@ -167,6 +197,7 @@ async function runProjectAction(actionId, body = {}) {
   session.runMode = action.runMode || action.id;
   session.connectionState = "reconnected_in_flight";
   session.missionStartupProgress = { percent: 100, step: "Started", detail: `${action.label} started in tmux.`, complete: true };
+  await persistSessionState();
   return { state: statusPayload() };
 }
 
@@ -315,9 +346,10 @@ app.get("/drone/prefill", asyncRoute(async (_req, res) => {
   });
 }));
 
-app.get("/drone/status", (_req, res) => {
+app.get("/drone/status", asyncRoute(async (_req, res) => {
+  await reconcileInFlightFromTarget();
   res.json(statusPayload());
-});
+}));
 
 app.post("/drone/connect", asyncRoute(async (req, res) => {
   await setTarget(req.body.projectId, req.body.mode, req.body.password, req.body.projectRoot || "");
@@ -456,14 +488,7 @@ app.get("/drone/tmux-log", asyncRoute(async (_req, res) => {
     log.text = session.lastTmuxLog;
     log.stale = true;
   }
-  // Scripts can finish (or die) on their own, ending the tmux session. Without
-  // this reconciliation the session stays "in flight" forever, leaving start
-  // buttons disabled and the stop button armed for a run that no longer exists.
-  if (session.inFlight && !log.hasSession) {
-    session.inFlight = false;
-    session.runMode = null;
-    session.connectionState = "connected_idle";
-  }
+  await reconcileInFlightFromTarget();
   res.json(log);
 }));
 
@@ -561,6 +586,7 @@ async function restorePersistedSession() {
       `Re-adopted running simulation for ${project.name || project.id} after backend restart.`,
     ];
     progress.update("simSetupProgress", 100, "Connected", "Simulation container is available.", true);
+    await reconcileInFlightFromTarget();
     console.log(`Re-adopted running sim session: ${project.id} (${project.modes.sim.containerName})`);
   } catch (error) {
     console.warn(`Could not re-adopt persisted session: ${error.message}`);

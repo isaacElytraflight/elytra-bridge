@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { Client } from "ssh2";
-import { shellQuote, sleep } from "./shell.js";
+import { shellQuote, sleep, tmuxScriptRunningProbe } from "./shell.js";
 
 function remoteDir(remotePath) {
   const idx = remotePath.lastIndexOf("/");
@@ -104,14 +104,30 @@ export class SshTarget {
     await this.exec(`tmux kill-session -t ${shellQuote(session)} 2>/dev/null || true`);
   }
 
+  async isScriptRunning() {
+    try {
+      await this.exec(tmuxScriptRunningProbe(this.config.tmuxSession));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   async captureLog() {
     const session = this.config.tmuxSession;
     const lines = this.config.tmuxCaptureLines;
+    let hasSession = false;
+    try {
+      await this.exec(`tmux has-session -t ${shellQuote(session)} 2>/dev/null`);
+      hasSession = true;
+    } catch {
+      hasSession = false;
+    }
     try {
       const { stdout } = await this.exec(`tmux capture-pane -pt ${shellQuote(session)} -S -${lines} 2>/dev/null || true`);
-      return { text: stdout, hasSession: Boolean(stdout) };
+      return { text: stdout, hasSession };
     } catch {
-      return { text: "", hasSession: false };
+      return { text: "", hasSession };
     }
   }
 }

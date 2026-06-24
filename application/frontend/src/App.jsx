@@ -368,7 +368,9 @@ export default function App() {
     setBusy(true);
     setInfo("");
     try {
-      if (action.stopAction && simModeActive) {
+      // drone-2026 End Mission sets resetOnStop to restart SITL; Habitat stop
+      // only kills the tmux episode (backend runProjectAction stop path).
+      if (action.stopAction && simModeActive && action.resetOnStop) {
         const result = await api.resetSimulation();
         if (result.state) setStatus(result.state);
         setInfo("Simulation mission ended and SITL restarted to its initial state.");

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import { promises as fsp } from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { runFile, runFileStream, shellQuote, sleep } from "./shell.js";
+import { runFile, runFileStream, shellQuote, sleep, tmuxScriptRunningProbe } from "./shell.js";
 
 const HOTSWAP_REMOTE_REPO_URL = "https://github.com/UAVs-at-Berkeley/drone-2026.git";
 const HOTSWAP_DEFAULT_BRANCH = "main";
@@ -302,6 +302,7 @@ export class SimTarget {
     const mission = remoteMissionPath ? ` ${shellQuote(remoteMissionPath)}` : "";
     const args = extraArgs || this.config.missionExtraArgs || "";
     const exports = [
+      ["DISPLAY", ":1"],
       ["ELYTRA_TARGET", "sim"],
       ["ELYTRA_ROS_DISTRO", "jazzy"],
       ["DRONE_MISSION_EXTRA_ARGS", args],
@@ -332,10 +333,22 @@ export class SimTarget {
     await this.exec(`tmux kill-session -t ${shellQuote(session)} 2>/dev/null || true`, { user: simUser });
   }
 
+  /** True when the tmux pane is running a project script (not an idle shell). */
+  async isScriptRunning() {
+    const simUser = this.config.user || "";
+    try {
+      await this.exec(tmuxScriptRunningProbe(this.config.tmuxSession), { user: simUser });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   async reset() {
     await this.stop();
     if (this.config.composeFile) {
       await runFile("docker", this.composeArgs(["restart"]), { timeout: 120000 });
+      await this.exec("bash /workspace/scripts/ensure_display.sh 2>/dev/null || true");
     }
   }
 
@@ -346,11 +359,23 @@ export class SimTarget {
   }
 
   async captureLog() {
+    const session = this.config.tmuxSession;
+    const simUser = this.config.user || "";
+    let hasSession = false;
     try {
-      const { stdout } = await this.exec(`tmux capture-pane -pt ${shellQuote(this.config.tmuxSession)} -S -${this.config.tmuxCaptureLines} 2>/dev/null || true`, { user: this.config.user || "" });
-      return { text: stdout, hasSession: Boolean(stdout) };
+      await this.exec(`tmux has-session -t ${shellQuote(session)} 2>/dev/null`, { user: simUser });
+      hasSession = true;
     } catch {
-      return { text: "", hasSession: false };
+      hasSession = false;
+    }
+    try {
+      const { stdout } = await this.exec(
+        `tmux capture-pane -pt ${shellQuote(session)} -S -${this.config.tmuxCaptureLines} 2>/dev/null || true`,
+        { user: simUser },
+      );
+      return { text: stdout, hasSession };
+    } catch {
+      return { text: "", hasSession };
     }
   }
 

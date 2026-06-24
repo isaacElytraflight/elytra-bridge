@@ -4,6 +4,17 @@ export function shellQuote(value) {
   return "'" + String(value).replace(/'/g, "'\\''") + "'";
 }
 
+/** Bash snippet: exit 0 when tmux session has a non-idle child process in its pane. */
+export function tmuxScriptRunningProbe(sessionName) {
+  const session = shellQuote(sessionName);
+  return [
+    `if ! tmux has-session -t ${session} 2>/dev/null; then exit 1; fi`,
+    `pane=$(tmux list-panes -t ${session} -F '#{pane_pid}' 2>/dev/null | head -1)`,
+    `if [ -z "$pane" ]; then exit 1; fi`,
+    `ps -o args= --ppid "$pane" 2>/dev/null | sed '/^$/d' | grep -vE '^(bash|sh|sleep|tail|tmux)( |$)' | grep -q .`,
+  ].join("; ");
+}
+
 export function runFile(command, args, options = {}) {
   const timeout = options.timeout ?? 120000;
   return new Promise((resolve, reject) => {
