@@ -191,6 +191,19 @@ async function runProjectAction(actionId, body = {}) {
     throw new Error("Save a mission before running this action.");
   }
 
+  if (action.oneshot) {
+    session.missionStartupProgress = { percent: 10, step: "Running", detail: `Executing ${action.label}.`, complete: false };
+    const { stdout, stderr } = await session.target.runOneShotScript(scriptPath, { extraArgs: action.extraArgs || "" });
+    session.missionStartupProgress = {
+      percent: 100,
+      step: "Done",
+      detail: (stdout || stderr || `${action.label} finished.`).trim().slice(-400),
+      complete: true,
+    };
+    await persistSessionState();
+    return { state: statusPayload(), output: stdout, stderr };
+  }
+
   session.missionStartupProgress = { percent: 10, step: "Starting", detail: `Launching ${action.label}.`, complete: false };
   await session.target.runScript(scriptPath, { remoteMissionPath, extraArgs: action.extraArgs || "" });
   session.inFlight = true;

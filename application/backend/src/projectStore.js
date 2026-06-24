@@ -245,6 +245,7 @@ export function projectForClient(project) {
       requiresMission: Boolean(button.requiresMission),
       stopAction: Boolean(button.stopAction),
       resetOnStop: Boolean(button.resetOnStop),
+      oneshot: Boolean(button.oneshot),
     })),
   };
 }

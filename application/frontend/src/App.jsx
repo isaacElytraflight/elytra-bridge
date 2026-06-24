@@ -712,7 +712,7 @@ export default function App() {
                   !status.sshConnected ||
                   busy ||
                   (action.requiresMission && !savedMissionPath) ||
-                  (!action.stopAction && status.inFlight) ||
+                  (!action.oneshot && !action.stopAction && status.inFlight) ||
                   (action.stopAction && !status.inFlight)
                 }
                 title={action.description}

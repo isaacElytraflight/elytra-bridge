@@ -89,12 +89,21 @@ export class SshTarget {
 
   async runScript(scriptPath, { remoteMissionPath = "", extraArgs = "" } = {}) {
     const session = this.config.tmuxSession;
+    const command = this._buildScriptCommand(scriptPath, { remoteMissionPath, extraArgs });
+    await this.exec(`tmux kill-session -t ${shellQuote(session)} 2>/dev/null || true`);
+    await this.exec(`tmux new-session -d -s ${shellQuote(session)} ${shellQuote(`bash -lc ${shellQuote(command)}`)}`);
+  }
+
+  async runOneShotScript(scriptPath, { extraArgs = "" } = {}) {
+    const command = this._buildScriptCommand(scriptPath, { extraArgs });
+    return this.exec(`bash -lc ${shellQuote(command)}`);
+  }
+
+  _buildScriptCommand(scriptPath, { remoteMissionPath = "", extraArgs = "" } = {}) {
     const source = this.config.rosInstallSetupPath ? `source ${shellQuote(this.config.rosInstallSetupPath)} || true; ` : "";
     const mission = remoteMissionPath ? ` ${shellQuote(remoteMissionPath)}` : "";
     const args = extraArgs || this.config.missionExtraArgs || "";
-    const command = `${source}export ELYTRA_TARGET=physical; export ELYTRA_ROS_DISTRO=jazzy; bash ${shellQuote(scriptPath)}${mission}${args ? ` ${args}` : ""}`;
-    await this.exec(`tmux kill-session -t ${shellQuote(session)} 2>/dev/null || true`);
-    await this.exec(`tmux new-session -d -s ${shellQuote(session)} ${shellQuote(`bash -lc ${shellQuote(command)}`)}`);
+    return `${source}export ELYTRA_TARGET=physical; export ELYTRA_ROS_DISTRO=jazzy; bash ${shellQuote(scriptPath)}${mission}${args ? ` ${args}` : ""}`;
   }
 
   async stop() {

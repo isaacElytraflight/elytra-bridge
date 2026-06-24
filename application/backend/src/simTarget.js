@@ -295,8 +295,20 @@ export class SimTarget {
 
   async runScript(scriptPath, { remoteMissionPath = "", extraArgs = "" } = {}) {
     const session = this.config.tmuxSession;
-    // Empty user = the container's default user (project-agnostic). Only
-    // override HOME/USER when a user is explicitly configured.
+    const simUser = this.config.user || "";
+    const command = this._buildScriptCommand(scriptPath, { remoteMissionPath, extraArgs });
+    await this.exec(`tmux kill-session -t ${shellQuote(session)} 2>/dev/null || true`, { user: simUser });
+    await this.exec(`tmux new-session -d -s ${shellQuote(session)} ${shellQuote(`bash -lc ${shellQuote(command)}`)}`, { user: simUser });
+  }
+
+  /** Run a script inside the container without disturbing the tmux session (ROS one-shots). */
+  async runOneShotScript(scriptPath, { extraArgs = "" } = {}) {
+    const simUser = this.config.user || "";
+    const command = this._buildScriptCommand(scriptPath, { extraArgs });
+    return this.exec(command, { user: simUser });
+  }
+
+  _buildScriptCommand(scriptPath, { remoteMissionPath = "", extraArgs = "" } = {}) {
     const simUser = this.config.user || "";
     const simHome = simUser ? `/home/${simUser}` : "";
     const mission = remoteMissionPath ? ` ${shellQuote(remoteMissionPath)}` : "";
@@ -311,7 +323,6 @@ export class SimTarget {
     if (simUser) {
       exports.unshift(["HOME", simHome], ["USER", simUser]);
     }
-    // ROS-specific exports only apply to projects that declare a ROS install.
     if (this.config.rosInstallSetupPath) {
       exports.push(
         ["DRONE_ROS_INSTALL", this.config.rosInstallSetupPath],
@@ -320,9 +331,7 @@ export class SimTarget {
       );
     }
     const envExports = exports.map(([key, value]) => `export ${key}=${shellQuote(value)};`).join(" ");
-    const command = `${envExports} bash ${shellQuote(scriptPath)}${mission}${args ? ` ${args}` : ""}`;
-    await this.exec(`tmux kill-session -t ${shellQuote(session)} 2>/dev/null || true`, { user: simUser });
-    await this.exec(`tmux new-session -d -s ${shellQuote(session)} ${shellQuote(`bash -lc ${shellQuote(command)}`)}`, { user: simUser });
+    return `${envExports} bash ${shellQuote(scriptPath)}${mission}${args ? ` ${args}` : ""}`;
   }
 
   async stop() {
