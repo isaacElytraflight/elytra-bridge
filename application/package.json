@@ -7,6 +7,7 @@
     "backend"
   ],
   "scripts": {
+    "predev": "node ../scripts/ensure-single-instance.js",
     "dev": "concurrently \"npm run dev --workspace backend\" \"npm run dev --workspace frontend\"",
     "build": "npm run build --workspace frontend",
     "start": "npm run start --workspace backend"
