@@ -217,6 +217,7 @@ function buildSimConfig(descriptor, projectRoot, env = {}) {
   return {
     ...common,
     mode: "sim",
+    modeEnvPath: projectModeEnvPath(projectRoot, "sim"),
     composeFile: resolvePath(envValueFrom(env, "SIM_COMPOSE_FILE", raw.composeFile || ""), projectRoot),
     composeProject: envValueFrom(env, "SIM_COMPOSE_PROJECT", raw.composeProject || ""),
     composeService: envValueFrom(env, "SIM_COMPOSE_SERVICE", raw.composeService || "sim"),

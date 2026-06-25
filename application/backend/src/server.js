@@ -536,6 +536,7 @@ const envFields = [
   ["SIM_DRONE_TMUX_STOP_GRACE_SECONDS", "Simulation stop grace seconds", false],
   ["SIM_DRONE_MISSION_EXTRA_ARGS", "Simulation mission extra args", false],
   ["SIM_AUTOSTOP_ON_DISCONNECT", "Auto-stop sim on disconnect", false],
+  ["GEMINI_API_KEY", "Gemini API key (VLM exploration fallback)", true],
   ["RECONNECT_BACKOFF_MS", "Reconnect backoff ms", false],
 ];
 

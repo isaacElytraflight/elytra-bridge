@@ -81,6 +81,9 @@ export class SimTarget {
 
   composeArgs(args) {
     const result = ["compose"];
+    if (this.config.modeEnvPath && fs.existsSync(this.config.modeEnvPath)) {
+      result.push("--env-file", this.config.modeEnvPath);
+    }
     if (this.config.composeFile) result.push("-f", this.config.composeFile);
     if (this.config.composeProject) result.push("-p", this.config.composeProject);
     return result.concat(args);
@@ -88,6 +91,9 @@ export class SimTarget {
 
   composeProfileArgs(profile, args) {
     const result = ["compose", "--profile", profile];
+    if (this.config.modeEnvPath && fs.existsSync(this.config.modeEnvPath)) {
+      result.push("--env-file", this.config.modeEnvPath);
+    }
     if (this.config.composeFile) result.push("-f", this.config.composeFile);
     if (this.config.composeProject) result.push("-p", this.config.composeProject);
     return result.concat(args);
