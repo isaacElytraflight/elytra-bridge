@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import yaml from "js-yaml";
 import { appConfig, envNumberFrom, envValueFrom, projectModeEnvPath, readEnvFile, resolvePath } from "./config.js";
+import { normalizeViews } from "./viewConfig.js";
 
 const MODE_ENV_PREFIX = {
   physical: "DRONE",
@@ -104,6 +105,11 @@ export async function validateProjectFolder(projectRootInput) {
 
   await warnIfRelativeRepoMissing("real.privateKeyPath", descriptor.real?.privateKeyPath);
 
+  const viewsResult = normalizeViews(descriptor.views);
+  if (!viewsResult.ok) {
+    errors.push(viewsResult.message);
+  }
+
   return { ok: errors.length === 0, warnings, errors, root, descriptor };
 }
 
@@ -155,6 +161,11 @@ export async function loadProject(projectId = appConfig().defaultProjectId, opti
   const physicalEnv = selectedMode === "physical" ? readEnvFile(projectModeEnvPath(projectRoot, "physical")) : {};
   const simEnv = selectedMode === "sim" ? readEnvFile(projectModeEnvPath(projectRoot, "sim")) : {};
 
+  const viewsResult = normalizeViews(descriptor.views);
+  if (!viewsResult.ok) {
+    throw new Error(viewsResult.message);
+  }
+
   return {
     ...descriptor,
     id,
@@ -168,6 +179,7 @@ export async function loadProject(projectId = appConfig().defaultProjectId, opti
       sim: buildSimConfig(descriptor, projectRoot, simEnv),
     },
     buttons: Array.isArray(descriptor.buttons) ? descriptor.buttons : [],
+    views: viewsResult.views,
   };
 }
 
@@ -226,6 +238,7 @@ function buildSimConfig(descriptor, projectRoot, env = {}) {
     // (e.g. root); "sim" preserved as drone-2026's convention via project.yaml.
     user: envValueFrom(env, "SIM_USER", raw.user || ""),
     novncOrigin: envValueFrom(env, "SIM_NOVNC_ORIGIN", raw.novncOrigin || ""),
+    viewServerPort: envNumberFrom(env, "SIM_VIEW_SERVER_PORT", raw.viewServerPort || 8090),
     autoStopOnDisconnect: envValueFrom(env, "SIM_AUTOSTOP_ON_DISCONNECT", raw.autoStopOnDisconnect ? "1" : "0") === "1",
   };
 }
@@ -247,6 +260,14 @@ export function projectForClient(project) {
       stopAction: Boolean(button.stopAction),
       resetOnStop: Boolean(button.resetOnStop),
       oneshot: Boolean(button.oneshot),
+    })),
+    views: (project.views || []).map((view) => ({
+      id: view.id,
+      label: view.label,
+      type: view.type,
+      ...(view.topic ? { topic: view.topic } : {}),
+      ...(view.path ? { path: view.path } : {}),
+      primary: Boolean(view.primary),
     })),
   };
 }

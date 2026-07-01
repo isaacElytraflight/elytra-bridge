@@ -77,6 +77,7 @@ export const api = {
       body: JSON.stringify({ branch }),
     }),
   tmuxLog: () => request("/drone/tmux-log"),
+  simViews: () => request("/sim/views"),
   getSettingsEnv: () => request("/settings/env"),
   putSettingsEnv: (updates) => request("/settings/env", { method: "PUT", body: JSON.stringify(updates) }),
 };

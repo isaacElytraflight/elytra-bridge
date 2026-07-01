@@ -11,6 +11,7 @@ import { readSessionState, writeSessionState, clearSessionState } from "./sessio
 import { SimTarget } from "./simTarget.js";
 import { SshTarget } from "./sshTarget.js";
 import { validateMissionFilename, validateMissionYaml } from "./missionValidation.js";
+import { fetchViewFrame } from "./rosViewBridge.js";
 
 ensureEnvFile();
 
@@ -113,6 +114,10 @@ async function setTarget(projectId, mode, password = "", openProjectRoot = "") {
     session.sshConnected = true;
     session.connectionState = "connected_idle";
     session.connectTrace.push(selectedMode === "sim" ? "Docker simulation connected." : "SSH connection established.");
+    if (selectedMode === "sim" && session.target.writeViewsConfig) {
+      await session.target.writeViewsConfig(project.views || []);
+      session.connectTrace.push("Wrote simulation view config to container.");
+    }
     await writeSessionState({ projectId: project.id, projectRoot: session.openProjectRoot, mode: selectedMode }).catch(() => {});
   } catch (error) {
     session.connectionState = "disconnected";
@@ -205,6 +210,9 @@ async function runProjectAction(actionId, body = {}) {
   }
 
   session.missionStartupProgress = { percent: 10, step: "Starting", detail: `Launching ${action.label}.`, complete: false };
+  if (session.mode === "sim" && session.target?.writeViewsConfig) {
+    await session.target.writeViewsConfig(session.project.views || []);
+  }
   await session.target.runScript(scriptPath, { remoteMissionPath, extraArgs: action.extraArgs || "" });
   session.inFlight = true;
   session.runMode = action.runMode || action.id;
@@ -505,6 +513,46 @@ app.get("/drone/tmux-log", asyncRoute(async (_req, res) => {
   res.json(log);
 }));
 
+function requireSimConnected() {
+  requireConnected();
+  if (session.mode !== "sim") {
+    throw new Error("Simulation views are only available in sim mode.");
+  }
+}
+
+app.get("/sim/views", asyncRoute(async (_req, res) => {
+  requireSimConnected();
+  const views = (session.project?.views || []).map((view) => ({
+    id: view.id,
+    label: view.label,
+    type: view.type,
+    primary: Boolean(view.primary),
+  }));
+  res.json({ views });
+}));
+
+app.get("/sim/views/:viewId/frame", asyncRoute(async (req, res) => {
+  requireSimConnected();
+  const viewId = String(req.params.viewId || "").trim();
+  const views = session.project?.views || [];
+  if (!views.some((view) => view.id === viewId)) {
+    res.status(404).json({ error: `Unknown view: ${viewId}` });
+    return;
+  }
+  if (typeof session.target.viewServerOrigin !== "function") {
+    res.status(503).json({ error: "View server is not available for this target." });
+    return;
+  }
+  const result = await fetchViewFrame(session.target.viewServerOrigin(), viewId);
+  if (!result.ok) {
+    res.status(result.status).json({ error: result.message });
+    return;
+  }
+  res.set("Content-Type", result.contentType);
+  res.set("Cache-Control", "no-store");
+  res.send(result.buffer);
+}));
+
 const envFields = [
   ["PORT", "Backend port", false],
   ["DRONE_HOST", "Physical host", false],
@@ -536,7 +584,12 @@ const envFields = [
   ["SIM_DRONE_TMUX_STOP_GRACE_SECONDS", "Simulation stop grace seconds", false],
   ["SIM_DRONE_MISSION_EXTRA_ARGS", "Simulation mission extra args", false],
   ["SIM_AUTOSTOP_ON_DISCONNECT", "Auto-stop sim on disconnect", false],
-  ["GEMINI_API_KEY", "Gemini API key (VLM exploration fallback)", true],
+  ["VLM_BACKEND", "VLM backend (local or gemini)", false],
+  ["VLM_OLLAMA_URL", "Ollama base URL for local VLM", false],
+  ["VLM_LOCAL_MODEL", "Ollama model tag for local VLM", false],
+  ["VLM_LOCAL_MAX_EDGE", "Max image edge (px) for local VLM", false],
+  ["VLM_LOCAL_TIMEOUT_S", "Local VLM HTTP timeout (seconds)", false],
+  ["GEMINI_API_KEY", "Gemini API key (when VLM_BACKEND=gemini)", true],
   ["RECONNECT_BACKOFF_MS", "Reconnect backoff ms", false],
 ];
 

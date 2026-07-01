@@ -266,6 +266,27 @@ export class SimTarget {
     this.progress.update("simSetupProgress", 100, "Connected", "Simulation container is available.", true);
   }
 
+  viewServerOrigin() {
+    const port = Number(this.config.viewServerPort) || 8090;
+    return `http://127.0.0.1:${port}`;
+  }
+
+  /** @param {Array<{ id: string }>} views */
+  async writeViewsConfig(views) {
+    if (!this.config.containerName || !Array.isArray(views)) return;
+    const tmpPath = path.join(os.tmpdir(), `elytra-views-${Date.now()}.json`);
+    await fsp.writeFile(tmpPath, JSON.stringify(views, null, 2), "utf-8");
+    try {
+      await runFile(
+        "docker",
+        ["cp", tmpPath, `${this.config.containerName}:/tmp/elytra_views.json`],
+        { timeout: 30000 },
+      );
+    } finally {
+      await fsp.unlink(tmpPath).catch(() => {});
+    }
+  }
+
   async disconnect() {}
 
   /** Cheap liveness probe used to re-adopt a session after a backend restart. */

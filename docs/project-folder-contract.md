@@ -131,6 +131,23 @@ Each entry defines one UI button:
 
 The backend exposes a **sanitized subset** to the client (`projectForClient`).
 
+### 2.7 Simulation views — `views:` array
+
+Each entry defines one panel in the Elytra **Simulation Dashboard** (sim mode only):
+
+| Field | Required | Meaning |
+|-------|----------|---------|
+| `id` | Yes | Stable view id used by `/sim/views/:id/frame`. |
+| `label` | Yes | Panel title in the UI |
+| `type` | Yes | `ros-image`, `ros-compressed`, or `file` |
+| `topic` | For ROS types | ROS 2 topic name (e.g. `/image_data`, `/map_renderer/map_img`) |
+| `path` | For `file` | Absolute path inside the container to a JPEG (polled) |
+| `primary` | Optional | If true, panel spans the main dashboard area |
+
+On sim connect, Elytra writes the normalized views list to `/tmp/elytra_views.json` inside the container for the in-container view server.
+
+Optional sim block key: `viewServerPort` (default `8090`) — host port for the HTTP frame server.
+
 ---
 
 ## 3. Environment precedence

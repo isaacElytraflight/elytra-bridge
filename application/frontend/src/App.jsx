@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
+import SimulationDashboard from "./SimulationDashboard";
 
 const emptyStatus = {
   projectId: "drone-2026",
@@ -479,20 +480,6 @@ export default function App() {
     return "Disconnected";
   }, [status.connectionState]);
 
-  const resolvedSimViewerUrl = useMemo(() => {
-    const raw = status.simViewerUrl || "";
-    if (!raw) return "";
-    try {
-      const parsed = new URL(raw, window.location.origin);
-      if (parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost") {
-        parsed.hostname = window.location.hostname;
-      }
-      return parsed.toString();
-    } catch {
-      return raw;
-    }
-  }, [status.simViewerUrl]);
-
   const canSave = status.sshConnected && !busy;
   const simModeActive = (status.mode || connectionMode) === "sim";
   const canHotswapRepo = simModeActive && status.sshConnected && !busy && !hotswapBusy;
@@ -732,18 +719,12 @@ export default function App() {
         </div>
       </section>
 
-      {simModeActive && resolvedSimViewerUrl && (
-        <section className="panel">
-          <h2>Simulation View</h2>
-          <p className="muted">Live simulator desktop stream from the Docker container through noVNC.</p>
-          <iframe
-            allow="fullscreen"
-            allowFullScreen
-            className="novnc"
-            src={resolvedSimViewerUrl}
-            title="Simulation noVNC viewer"
-          />
-        </section>
+      {simModeActive && (
+        <SimulationDashboard
+          connected={status.sshConnected}
+          simViewerUrl={status.simViewerUrl}
+          views={project?.views || []}
+        />
       )}
 
       {simModeActive && (
