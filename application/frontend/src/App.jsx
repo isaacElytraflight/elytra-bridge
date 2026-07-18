@@ -76,6 +76,8 @@ export default function App() {
   const [theme, setTheme] = useState(getInitialTheme);
   const [hotswapBusy, setHotswapBusy] = useState(false);
   const [hotswapStatus, setHotswapStatus] = useState("");
+  const [realtimeMode, setRealtimeMode] = useState(false);
+  const [movementModeBusy, setMovementModeBusy] = useState(false);
   const tmuxPreRef = useRef(null);
   const tmuxLogRef = useRef("");
   const followLogRef = useRef(true);
@@ -325,8 +327,26 @@ export default function App() {
     try {
       const next = await api.status();
       setStatus(next);
+      if (next.movementMode?.realtime !== undefined) {
+        setRealtimeMode(Boolean(next.movementMode.realtime));
+      }
     } catch (error) {
       setStatus((prev) => ({ ...prev, connectionState: "disconnected", sshConnected: false, lastError: error.message }));
+    }
+  }
+
+  async function setRealtimeModeEnabled(enabled) {
+    setMovementModeBusy(true);
+    try {
+      const result = await api.setMovementMode({ realtime: enabled, navigationMode: "nav2" });
+      if (result.state) setStatus(result.state);
+      setRealtimeMode(Boolean(result.movementMode?.realtime));
+      setInfo(enabled ? "Real-time motion enabled." : "Sped-up motion enabled.");
+    } catch (error) {
+      if (error.details?.state) setStatus(error.details.state);
+      setInfo(error.message);
+    } finally {
+      setMovementModeBusy(false);
     }
   }
 
@@ -699,7 +719,10 @@ export default function App() {
                   !status.sshConnected ||
                   busy ||
                   (action.requiresMission && !savedMissionPath) ||
-                  (!action.oneshot && !action.stopAction && status.inFlight) ||
+                  (!action.oneshot &&
+                    !action.stopAction &&
+                    action.kind !== "teleop" &&
+                    status.inFlight) ||
                   (action.stopAction && !status.inFlight)
                 }
                 title={action.description}
@@ -709,6 +732,15 @@ export default function App() {
             ))}
             {simModeActive && (
               <>
+                <label className="toggle-row" title="Cap sim motion at ~30 deg/s turn and 10 cm/s travel">
+                  <input
+                    type="checkbox"
+                    checked={realtimeMode}
+                    disabled={!status.sshConnected || movementModeBusy}
+                    onChange={(event) => setRealtimeModeEnabled(event.target.checked)}
+                  />
+                  Real-time motion
+                </label>
                 <button className="secondary" onClick={loadRepoBranch} disabled={!canHotswapRepo}>
                   {hotswapBusy ? "Loading Repo Branch..." : "Load Repo Branch"}
                 </button>

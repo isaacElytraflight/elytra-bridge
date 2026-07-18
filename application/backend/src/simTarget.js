@@ -329,6 +329,30 @@ export class SimTarget {
   }
 
   /** Run a script inside the container without disturbing the tmux session (ROS one-shots). */
+  async teleopStep(direction) {
+    const allowed = new Set(["forward", "backward", "turn_left", "turn_right"]);
+    const dir = String(direction || "").trim().toLowerCase();
+    if (!allowed.has(dir)) {
+      throw new Error(`Invalid teleop direction: ${direction}`);
+    }
+    // Direct docker exec of python — no bash -lc, no ROS sourcing, no oneshot script.
+    const code =
+      "import socket,sys;" +
+      "d=sys.argv[1];" +
+      "s=socket.socket(socket.AF_UNIX);" +
+      "s.settimeout(3);" +
+      "s.connect('/tmp/elytra_teleop.sock');" +
+      "s.sendall((d+'\\n').encode());" +
+      "r=s.recv(64);" +
+      "sys.stdout.write(r.decode());" +
+      "raise SystemExit(0 if r.startswith(b'ok:') else 1)";
+    return runFile(
+      "docker",
+      ["exec", this.config.containerName, "/usr/bin/python3", "-c", code, dir],
+      { timeout: 8000 },
+    );
+  }
+
   async runOneShotScript(scriptPath, { extraArgs = "" } = {}) {
     const simUser = this.config.user || "";
     const command = this._buildScriptCommand(scriptPath, { extraArgs });
@@ -364,6 +388,11 @@ export class SimTarget {
   async stop() {
     const session = this.config.tmuxSession;
     const simUser = this.config.user || "";
+    // Prefer project stop script: kills tmux AND orphaned ros2/habitat processes.
+    if (this.config.stopScriptPath) {
+      await this.exec(`bash ${shellQuote(this.config.stopScriptPath)}`, { user: simUser });
+      return;
+    }
     await this.exec(`tmux send-keys -t ${shellQuote(session)} C-c 2>/dev/null || true`, { user: simUser });
     await sleep(this.config.tmuxStopGraceSeconds * 1000);
     await this.exec(`tmux kill-session -t ${shellQuote(session)} 2>/dev/null || true`, { user: simUser });
@@ -556,5 +585,23 @@ export class SimTarget {
       }
       throw new Error(`colcon build failed after hotswap: ${error.message}`);
     }
+  }
+
+  /** Toggle realtime motion cap on cmd_vel bridge (and optional explore navigation mode). */
+  async setMovementMode({ realtime = false, navigationMode = "nav2" } = {}) {
+    const simUser = this.config.user || "";
+    const rosSetup = this.config.rosInstallSetupPath
+      ? `source ${shellQuote(this.config.rosInstallSetupPath)} && `
+      : "source /opt/ros/jazzy/setup.bash && source /opt/explorer_workspace/ros_workspace/install/setup.bash && ";
+    const realtimeVal = realtime ? "true" : "false";
+    const minInterval = realtime ? "0.35" : "0.15";
+    const navMode = navigationMode === "discrete" ? "discrete" : "nav2";
+    const cmd = [
+      `${rosSetup}ros2 param set /cmd_vel_to_discrete realtime_mode ${realtimeVal} 2>/dev/null || true`,
+      `${rosSetup}ros2 param set /cmd_vel_to_discrete min_command_interval ${minInterval} 2>/dev/null || true`,
+      `${rosSetup}ros2 param set /explore navigation_mode ${shellQuote(navMode)} 2>/dev/null || true`,
+    ].join("; ");
+    await this.exec(cmd, { user: simUser });
+    return { realtime, navigationMode: navMode };
   }
 }

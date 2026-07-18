@@ -108,6 +108,10 @@ export class SshTarget {
 
   async stop() {
     const session = this.config.tmuxSession;
+    if (this.config.stopScriptPath) {
+      await this.exec(`bash ${shellQuote(this.config.stopScriptPath)}`);
+      return;
+    }
     await this.exec(`tmux send-keys -t ${shellQuote(session)} C-c 2>/dev/null || true`);
     await sleep(this.config.tmuxStopGraceSeconds * 1000);
     await this.exec(`tmux kill-session -t ${shellQuote(session)} 2>/dev/null || true`);

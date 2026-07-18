@@ -78,6 +78,12 @@ export const api = {
     }),
   tmuxLog: () => request("/drone/tmux-log"),
   simViews: () => request("/sim/views"),
+  getMovementMode: () => request("/sim/movement-mode"),
+  setMovementMode: ({ realtime, navigationMode }) =>
+    request("/sim/movement-mode", {
+      method: "PUT",
+      body: JSON.stringify({ realtime, navigationMode }),
+    }),
   getSettingsEnv: () => request("/settings/env"),
   putSettingsEnv: (updates) => request("/settings/env", { method: "PUT", body: JSON.stringify(updates) }),
 };

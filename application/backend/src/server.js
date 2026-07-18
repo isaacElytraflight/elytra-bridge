@@ -40,6 +40,7 @@ const session = {
   simSetupProgress: idleProgress(),
   missionStartupProgress: idleProgress(),
   lastTmuxLog: "",
+  movementMode: { realtime: false, navigationMode: "nav2" },
 };
 
 const progress = {
@@ -77,6 +78,7 @@ function statusPayload() {
     dockerBuildProgress: session.dockerBuildProgress,
     simSetupProgress: session.simSetupProgress,
     missionStartupProgress: session.missionStartupProgress,
+    movementMode: session.movementMode,
   };
 }
 
@@ -186,6 +188,17 @@ async function runProjectAction(actionId, body = {}) {
     session.connectionState = "connected_idle";
     await persistSessionState();
     return { state: statusPayload() };
+  }
+
+  // Fast path: unix-socket teleop inside the sim (no ROS CLI / oneshot script).
+  const teleopDirection = String(action.teleopDirection || "").trim();
+  if (action.kind === "teleop" || teleopDirection) {
+    if (typeof session.target.teleopStep !== "function") {
+      throw new Error("Teleop is only available in sim mode.");
+    }
+    const direction = teleopDirection || String(action.extraArgs || "").trim();
+    const { stdout, stderr } = await session.target.teleopStep(direction);
+    return { state: statusPayload(), output: stdout, stderr };
   }
 
   const modeConfig = session.project.modes[session.mode];
@@ -551,6 +564,22 @@ app.get("/sim/views/:viewId/frame", asyncRoute(async (req, res) => {
   res.set("Content-Type", result.contentType);
   res.set("Cache-Control", "no-store");
   res.send(result.buffer);
+}));
+
+app.get("/sim/movement-mode", asyncRoute(async (_req, res) => {
+  requireSimConnected();
+  res.json({ movementMode: session.movementMode, state: statusPayload() });
+}));
+
+app.put("/sim/movement-mode", asyncRoute(async (req, res) => {
+  requireSimConnected();
+  const realtime = Boolean(req.body?.realtime);
+  const navigationMode = req.body?.navigationMode === "discrete" ? "discrete" : "nav2";
+  if (typeof session.target.setMovementMode === "function") {
+    await session.target.setMovementMode({ realtime, navigationMode });
+  }
+  session.movementMode = { realtime, navigationMode };
+  res.json({ ok: true, movementMode: session.movementMode, state: statusPayload() });
 }));
 
 const envFields = [

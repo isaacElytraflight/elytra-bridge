@@ -229,6 +229,17 @@ summary {
   font-weight: 600;
 }
 
+.toggle-row {
+  align-items: center;
+  display: inline-flex;
+  gap: 0.5rem;
+  user-select: none;
+}
+
+.toggle-row input {
+  accent-color: var(--accent);
+}
+
 .progress-block + .progress-block {
   margin-top: 1rem;
 }

@@ -202,6 +202,7 @@ function buildCommonModeConfig(raw = {}, prefix, env = {}) {
     tmuxStopGraceSeconds: Math.max(0, envNumberFrom(env, `${prefix}_TMUX_STOP_GRACE_SECONDS`, raw.tmuxStopGraceSeconds || 20)),
     missionExtraArgs: envValueFrom(env, `${prefix}_MISSION_EXTRA_ARGS`, raw.missionExtraArgs || ""),
     startScriptPath: envValueFrom(env, `${prefix}_START_SCRIPT_PATH`, raw.startScriptPath || ""),
+    stopScriptPath: envValueFrom(env, `${prefix}_STOP_SCRIPT_PATH`, raw.stopScriptPath || ""),
     recordingScriptPath: envValueFrom(env, `${prefix}_RECORDING_SCRIPT_PATH`, raw.recordingScriptPath || ""),
     actions: raw.actions || {},
   };
