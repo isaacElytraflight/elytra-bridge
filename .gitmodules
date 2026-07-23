@@ -2,3 +2,5 @@
 	path = projects/drone-2026
 	url = https://github.com/UAVs-at-Berkeley/drone-2026.git
 	branch = main
+	# Local edits in this upstream clone should not dirty elytra-bridge status.
+	ignore = dirty
