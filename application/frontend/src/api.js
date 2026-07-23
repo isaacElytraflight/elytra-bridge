@@ -84,6 +84,12 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ realtime, navigationMode }),
     }),
+  getExplorationPolicy: () => request("/sim/exploration-policy"),
+  setExplorationPolicy: ({ dfsPreferHighest, parentToNearestNode }) =>
+    request("/sim/exploration-policy", {
+      method: "PUT",
+      body: JSON.stringify({ dfsPreferHighest, parentToNearestNode }),
+    }),
   getSettingsEnv: () => request("/settings/env"),
   putSettingsEnv: (updates) => request("/settings/env", { method: "PUT", body: JSON.stringify(updates) }),
 };

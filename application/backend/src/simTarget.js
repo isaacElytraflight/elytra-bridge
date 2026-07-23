@@ -604,4 +604,23 @@ export class SimTarget {
     await this.exec(cmd, { user: simUser });
     return { realtime, navigationMode: navMode };
   }
+
+  /** Live explore_node policy toggles (DFS order, nearest-parent attach). */
+  async setExplorationPolicy({
+    dfsPreferHighest = true,
+    parentToNearestNode = true,
+  } = {}) {
+    const simUser = this.config.user || "";
+    const rosSetup = this.config.rosInstallSetupPath
+      ? `source ${shellQuote(this.config.rosInstallSetupPath)} && `
+      : "source /opt/ros/jazzy/setup.bash && source /opt/explorer_workspace/ros_workspace/install/setup.bash && ";
+    const dfsVal = dfsPreferHighest ? "true" : "false";
+    const nearestVal = parentToNearestNode ? "true" : "false";
+    const cmd = [
+      `${rosSetup}ros2 param set /explore dfs_prefer_highest_openness ${dfsVal} 2>/dev/null || true`,
+      `${rosSetup}ros2 param set /explore parent_to_nearest_node ${nearestVal} 2>/dev/null || true`,
+    ].join("; ");
+    await this.exec(cmd, { user: simUser });
+    return { dfsPreferHighest: Boolean(dfsPreferHighest), parentToNearestNode: Boolean(parentToNearestNode) };
+  }
 }

@@ -41,6 +41,10 @@ const session = {
   missionStartupProgress: idleProgress(),
   lastTmuxLog: "",
   movementMode: { realtime: false, navigationMode: "nav2" },
+  explorationPolicy: {
+    dfsPreferHighest: true,
+    parentToNearestNode: true,
+  },
 };
 
 const progress = {
@@ -79,6 +83,7 @@ function statusPayload() {
     simSetupProgress: session.simSetupProgress,
     missionStartupProgress: session.missionStartupProgress,
     movementMode: session.movementMode,
+    explorationPolicy: session.explorationPolicy,
   };
 }
 
@@ -580,6 +585,26 @@ app.put("/sim/movement-mode", asyncRoute(async (req, res) => {
   }
   session.movementMode = { realtime, navigationMode };
   res.json({ ok: true, movementMode: session.movementMode, state: statusPayload() });
+}));
+
+app.get("/sim/exploration-policy", asyncRoute(async (_req, res) => {
+  requireSimConnected();
+  res.json({ explorationPolicy: session.explorationPolicy, state: statusPayload() });
+}));
+
+app.put("/sim/exploration-policy", asyncRoute(async (req, res) => {
+  requireSimConnected();
+  const dfsPreferHighest = req.body?.dfsPreferHighest !== undefined
+    ? Boolean(req.body.dfsPreferHighest)
+    : session.explorationPolicy.dfsPreferHighest;
+  const parentToNearestNode = req.body?.parentToNearestNode !== undefined
+    ? Boolean(req.body.parentToNearestNode)
+    : session.explorationPolicy.parentToNearestNode;
+  if (typeof session.target.setExplorationPolicy === "function") {
+    await session.target.setExplorationPolicy({ dfsPreferHighest, parentToNearestNode });
+  }
+  session.explorationPolicy = { dfsPreferHighest, parentToNearestNode };
+  res.json({ ok: true, explorationPolicy: session.explorationPolicy, state: statusPayload() });
 }));
 
 const envFields = [

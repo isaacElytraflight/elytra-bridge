@@ -78,6 +78,9 @@ export default function App() {
   const [hotswapStatus, setHotswapStatus] = useState("");
   const [realtimeMode, setRealtimeMode] = useState(false);
   const [movementModeBusy, setMovementModeBusy] = useState(false);
+  const [dfsPreferHighest, setDfsPreferHighest] = useState(true);
+  const [parentToNearestNode, setParentToNearestNode] = useState(true);
+  const [explorationPolicyBusy, setExplorationPolicyBusy] = useState(false);
   const tmuxPreRef = useRef(null);
   const tmuxLogRef = useRef("");
   const followLogRef = useRef(true);
@@ -330,6 +333,14 @@ export default function App() {
       if (next.movementMode?.realtime !== undefined) {
         setRealtimeMode(Boolean(next.movementMode.realtime));
       }
+      if (next.explorationPolicy) {
+        if (next.explorationPolicy.dfsPreferHighest !== undefined) {
+          setDfsPreferHighest(Boolean(next.explorationPolicy.dfsPreferHighest));
+        }
+        if (next.explorationPolicy.parentToNearestNode !== undefined) {
+          setParentToNearestNode(Boolean(next.explorationPolicy.parentToNearestNode));
+        }
+      }
     } catch (error) {
       setStatus((prev) => ({ ...prev, connectionState: "disconnected", sshConnected: false, lastError: error.message }));
     }
@@ -347,6 +358,31 @@ export default function App() {
       setInfo(error.message);
     } finally {
       setMovementModeBusy(false);
+    }
+  }
+
+  async function setExplorationPolicyPatch(patch) {
+    setExplorationPolicyBusy(true);
+    try {
+      const next = {
+        dfsPreferHighest: patch.dfsPreferHighest ?? dfsPreferHighest,
+        parentToNearestNode: patch.parentToNearestNode ?? parentToNearestNode,
+      };
+      const result = await api.setExplorationPolicy(next);
+      if (result.state) setStatus(result.state);
+      const policy = result.explorationPolicy || next;
+      setDfsPreferHighest(Boolean(policy.dfsPreferHighest));
+      setParentToNearestNode(Boolean(policy.parentToNearestNode));
+      if (patch.dfsPreferHighest !== undefined) {
+        setInfo(policy.dfsPreferHighest ? "DFS: highest openness first." : "DFS: lowest openness first.");
+      } else if (patch.parentToNearestNode !== undefined) {
+        setInfo(policy.parentToNearestNode ? "Parent new frontiers to nearest tree node." : "Parent new frontiers to current node.");
+      }
+    } catch (error) {
+      if (error.details?.state) setStatus(error.details.state);
+      setInfo(error.message);
+    } finally {
+      setExplorationPolicyBusy(false);
     }
   }
 
@@ -740,6 +776,24 @@ export default function App() {
                     onChange={(event) => setRealtimeModeEnabled(event.target.checked)}
                   />
                   Real-time motion
+                </label>
+                <label className="toggle-row" title="When on, pick the highest-openness child first (default)">
+                  <input
+                    type="checkbox"
+                    checked={dfsPreferHighest}
+                    disabled={!status.sshConnected || explorationPolicyBusy}
+                    onChange={(event) => setExplorationPolicyPatch({ dfsPreferHighest: event.target.checked })}
+                  />
+                  DFS highest first
+                </label>
+                <label className="toggle-row" title="Attach new frontiers to the nearest tree node (default on)">
+                  <input
+                    type="checkbox"
+                    checked={parentToNearestNode}
+                    disabled={!status.sshConnected || explorationPolicyBusy}
+                    onChange={(event) => setExplorationPolicyPatch({ parentToNearestNode: event.target.checked })}
+                  />
+                  Nearest-parent frontiers
                 </label>
                 <button className="secondary" onClick={loadRepoBranch} disabled={!canHotswapRepo}>
                   {hotswapBusy ? "Loading Repo Branch..." : "Load Repo Branch"}
